@@ -12,6 +12,7 @@ import json
 
 from voice_service import VoiceService
 from rag_service import RAGService
+from pharmacy_service import PharmacyService
 from ml_engine import analyze_risk, parse_medical_text
 
 # Load environment variables
@@ -41,6 +42,7 @@ rag_service = RAGService(
     supabase_url=os.getenv("VITE_SUPABASE_URL"),
     supabase_key=os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 )
+pharmacy_service = PharmacyService()
 
 # ==========================================
 # Request/Response Models
@@ -76,6 +78,10 @@ class PharmacyChatRequest(BaseModel):
 class ManualOrderRequest(BaseModel):
     patient_id: str          # auth.uid()
     items: list              # [{"medicine_id": str, "qty": int}]
+
+class PharmacistAIRequest(BaseModel):
+    message: str
+    use_voice: bool = False
 
 # ==========================================
 # ROUTES
@@ -1087,6 +1093,80 @@ async def agent_chat(request: AgentChatRequest):
         }
 
 # ==========================================
+# Pharmacist Agent UI (Superuser access API)
+# ==========================================
+
+@app.post("/pharmacist/ai-query", response_model=ChatResponse)
+async def pharmacist_ai_query(req: PharmacistAIRequest):
+    """
+    Superuser endpoint that maps the LIVE pharmacy environment
+    to the AI so it can answer administrative queries.
+    """
+    try:
+        sb = _get_sb()
+        
+        # 1. Gather live global intent data
+        inventory_res = sb.table("medicines").select("name, stock, reorder_threshold").execute()
+        orders_res = sb.table("orders").select("status").execute()
+        raw_res = sb.table("order_history_raw").select("total_price_eur").execute()
+
+        inventory = inventory_res.data or []
+        orders = orders_res.data or []
+        raw_history = raw_res.data or []
+
+        # 2. Extract quick metrics for the prompt
+        low_stock = [m for m in inventory if m["stock"] <= (m.get("reorder_threshold") or 10)]
+        pending_count = len([o for o in orders if o["status"] == "pending"])
+        total_revenue = sum(float(r["total_price_eur"] or 0) for r in raw_history)
+
+        inventory_str = "\n".join([f"- {m['name']}: {m['stock']} in stock (Min Threshold: {m.get('reorder_threshold') or 10})" for m in inventory])
+        low_stock_str = "\n".join([f"- {m['name']}: {m['stock']}" for m in low_stock]) if low_stock else "None."
+
+        prompt = f"""
+        You are the Head Clinical Pharmacist AI Assistant. You are advising the human Pharmacist who owns this portal.
+        You have direct "God-Mode" access to the entire pharmacy database. Be extremely concise, highly analytical, and professional. Use markdown formatting.
+        
+        --- LIVE PHARMACY DATABASE SUMMARY ---
+        Total Pending Orders: {pending_count}
+        Total Historical Revenue: €{total_revenue:.2f}
+        Medicines Critically Low on Stock:
+        {low_stock_str}
+        
+        Full Inventory Map:
+        {inventory_str}
+        ---------------------------------------
+        
+        The pharmacist says: "{req.message}"
+        
+        Provide your analysis or response. Do not hallucinate data outside this summary.
+        """
+
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        response = await asyncio.to_thread(model.generate_content, prompt)
+        ai_text = response.text or "I apologize, I could not compute an answer."
+
+        # Audio Generation (If requested)
+        audio_data = None
+        if req.use_voice:
+            # Clean markdown for TTS
+            clean_tts = ai_text.replace('*', '').replace('#', '').strip()
+            audio_bytes = await voice_service.synthesize_empathic(clean_tts, "en") # Always english standard for pharmacist
+            if audio_bytes:
+                import base64
+                audio_data = base64.b64encode(audio_bytes).decode('utf-8')
+
+        return ChatResponse(
+            success=True,
+            response=ai_text,
+            audio_data=audio_data
+        )
+
+    except Exception as e:
+        print(f"Pharmacist AI Agent Error: {e}")
+        return ChatResponse(success=False, response="", error=str(e))
+
+
+# ==========================================
 # Startup/Shutdown Events & Background Jobs
 # ==========================================
 import asyncio
@@ -1108,39 +1188,41 @@ async def email_polling_task():
         os.getenv("SUPABASE_SERVICE_ROLE_KEY")
     )
 
+    def _poll_and_send():
+        res = supa.table("notification_logs").select("*").eq("status", "pending").eq("channel", "email").execute()
+        if res.data:
+            for notif in res.data:
+                payload = notif.get("payload", {})
+                med_name = payload.get("medicine_name", "Unknown")
+                stock = payload.get("current_stock", 0)
+                threshold = payload.get("threshold", 10)
+                
+                if smtp_password and smtp_user:
+                    try:
+                        msg = MIMEMultipart()
+                        msg['From'] = smtp_user
+                        msg['To'] = pharmacist_email
+                        msg['Subject'] = f"🚨 URGENT: Low Stock Alert - {med_name}"
+                        
+                        body = f"Hello Pharmacist,\n\nOur system detected critically low inventory for {med_name}.\n\nCurrent Stock: {stock}\nReorder Threshold: {threshold}\n\nPlease restock immediately.\n\n- MyHealthChain AI Agent"
+                        msg.attach(MIMEText(body, 'plain'))
+                        
+                        server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
+                        server.starttls()
+                        server.login(smtp_user, smtp_password)
+                        server.send_message(msg)
+                        server.quit()
+                        print(f"✅ Sent email alert for {med_name} to {pharmacist_email}")
+                    except Exception as e:
+                        print(f"❌ Failed to send email for {notif['id']}: {e}")
+                else:
+                    print(f"⚠️ SMTP credentials missing. Simulated Email Sent for {med_name} to pharmacist.")
+
+                supa.table("notification_logs").update({"status": "sent"}).eq("id", notif["id"]).execute()
+
     while True:
         try:
-            res = supa.table("notification_logs").select("*").eq("status", "pending").eq("channel", "email").execute()
-            if res.data:
-                for notif in res.data:
-                    payload = notif.get("payload", {})
-                    med_name = payload.get("medicine_name", "Unknown")
-                    stock = payload.get("current_stock", 0)
-                    threshold = payload.get("threshold", 10)
-                    
-                    if smtp_password and smtp_user:
-                        try:
-                            msg = MIMEMultipart()
-                            msg['From'] = smtp_user
-                            msg['To'] = pharmacist_email
-                            msg['Subject'] = f"🚨 URGENT: Low Stock Alert - {med_name}"
-                            
-                            body = f"Hello Pharmacist,\n\nOur system detected critically low inventory for {med_name}.\n\nCurrent Stock: {stock}\nReorder Threshold: {threshold}\n\nPlease restock immediately.\n\n- MyHealthChain AI Agent"
-                            msg.attach(MIMEText(body, 'plain'))
-                            
-                            server = smtplib.SMTP(smtp_server, smtp_port)
-                            server.starttls()
-                            server.login(smtp_user, smtp_password)
-                            server.send_message(msg)
-                            server.quit()
-                            print(f"✅ Sent email alert for {med_name} to {pharmacist_email}")
-                        except Exception as e:
-                            print(f"❌ Failed to send email for {notif['id']}: {e}")
-                    else:
-                        print(f"⚠️ SMTP credentials missing. Simulated Email Sent for {med_name} to pharmacist.")
-
-                    supa.table("notification_logs").update({"status": "sent"}).eq("id", notif["id"]).execute()
-                    
+            await asyncio.to_thread(_poll_and_send)
         except Exception as e:
              pass
              

@@ -7,6 +7,7 @@ User isolation is enforced by passing user_id in every sub-agent context.
 """
 import os
 import json
+import asyncio
 from typing import Any, Dict, List
 import google.generativeai as genai
 
@@ -181,7 +182,7 @@ class OrchestratorAgent:
         )
 
         chat    = self.model.start_chat()
-        response = chat.send_message(full_prompt)
+        response = await asyncio.to_thread(chat.send_message, full_prompt)
 
         agents_used: List[str] = []
         steps: List[Dict] = []
@@ -206,7 +207,8 @@ class OrchestratorAgent:
             agents_used.append(result.agent_name)
             steps.append({"agent": result.agent_name, "message": result.message, "success": result.success})
 
-            response = chat.send_message(
+            response = await asyncio.to_thread(
+                chat.send_message,
                 genai.protos.Content(parts=[
                     genai.protos.Part(
                         function_response=genai.protos.FunctionResponse(

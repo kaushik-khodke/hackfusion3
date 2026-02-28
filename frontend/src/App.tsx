@@ -73,8 +73,23 @@ function DashboardRouter() {
 
   if (loading) return <LoadingSpinner />;
 
+  // Temporary dev log to see exactly what role is evaluated:
+  console.log("DashboardRouter Role:", role);
+
   if (role === "doctor") return <DoctorDashboard />;
   if (role === "pharmacist") return <Navigate to="/pharmacist/dashboard" replace />;
+
+  if (role !== "patient" && role !== "doctor" && role !== "pharmacist") {
+    // If we reach here, role is something unexpected (maybe null or undefined)
+    return (
+      <div className="p-10">
+        <h1 className="text-xl font-bold text-red-500">Routing Debug</h1>
+        <p>Your resolved role is: <code>{JSON.stringify(role)}</code></p>
+        <p>If you signed up as a pharmacist, something failed to save the role to your profile.</p>
+        <button className="mt-4 px-4 py-2 bg-primary text-white" onClick={() => window.location.href = '/'}>Go Home</button>
+      </div>
+    );
+  }
 
   // Default fallback if profile is loaded but no other role matched (implies patient)
   return <PatientDashboard />;
