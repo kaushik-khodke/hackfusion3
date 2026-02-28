@@ -127,7 +127,13 @@ async def get_my_medicines(patient_id: str):
                 .eq("order_id", order["id"])
                 .execute()
             )
-            order["items"] = items_res.data or []
+            
+            # Inject created_at down into items for frontend schedule calculation
+            items = items_res.data or []
+            for item in items:
+                item["created_at"] = order.get("created_at")
+                
+            order["items"] = items
             enriched.append(order)
 
         return {"success": True, "orders": enriched}
