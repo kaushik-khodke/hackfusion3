@@ -11,18 +11,17 @@ class VoiceService:
         self.client = ElevenLabs(api_key=api_key)
         
         # Voice IDs for different languages and emotions
-        # These are ElevenLabs pre-made voices optimized for natural conversation
         self.voices = {
-            "en": "EXAVITQu4vr4xnSDxMaL",  # Sarah - Warm, empathetic female voice
+            "en": "cgSgspJ2msm6clMCkdW9",  # Jessica/Rachel - Extremely natural conversational voice
             "hi": "pNInz6obpgDQGcFmaJgB",  # Adam - Clear, friendly voice
             "mr": "pNInz6obpgDQGcFmaJgB",  # Adam works well for Marathi too
         }
         
         # Voice settings optimized for maximum empathy and expressiveness
         self.empathic_settings = VoiceSettings(
-            stability=0.5,        # Balanced stability (was 0.3)
-            similarity_boost=0.75,  # Voice consistency
-            style=0.5,            # Balanced style (was 0.8)
+            stability=0.35,       # Lower stability = more emotive inflection
+            similarity_boost=0.6, # Good balance for clarity vs expressiveness
+            style=0.5,            # Balanced style
             use_speaker_boost=True
         )
     
@@ -82,7 +81,7 @@ class VoiceService:
             audio_generator = self.client.text_to_speech.convert(
                 voice_id=voice_id,
                 text=clean_text,
-                model_id="eleven_multilingual_v2",  # Supports multiple languages
+                model_id="eleven_turbo_v2_5",  # Using Turbo v2.5 for extreme low latency + highest naturalness
                 voice_settings=self.empathic_settings,
             )
             
@@ -119,7 +118,7 @@ class VoiceService:
             audio_generator = self.client.text_to_speech.convert(
                 voice_id=voice_id,
                 text=clean_text,
-                model_id="eleven_multilingual_v2",
+                model_id="eleven_turbo_v2_5",
                 voice_settings=self.empathic_settings,
             )
             
