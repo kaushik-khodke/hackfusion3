@@ -48,6 +48,7 @@ interface OrderItem {
     frequency_per_day?: number
     days_supply?: number
     medicines: Medicine
+    created_at?: string
     // order_item_id stored in id for consume-dose API
 }
 
@@ -69,23 +70,78 @@ interface CartItem {
 }
 
 // ─── Helpers ──────────────────────────────────────────
-const FREQ_LABELS: Record<number, { label: string; times: string[] }> = {
-    1: { label: 'Once a day', times: ['08:00'] },
-    2: { label: 'Twice a day', times: ['08:00', '20:00'] },
-    3: { label: 'Three times a day', times: ['08:00', '14:00', '20:00'] },
-    4: { label: 'Four times a day', times: ['08:00', '12:00', '16:00', '20:00'] },
+const FREQ_LABELS: Record<number, string> = {
+    1: 'Once a day',
+    2: 'Twice a day',
+    3: 'Three times a day',
+    4: 'Four times a day',
 }
 
-function FreqBadges({ freq }: { freq?: number }) {
+function getNextDoseTimes(freq: number, createdAtStr?: string): string[] {
+    const windows = [8, 14, 20]
+
+    // Default to the standard static times if no creation date is provided (e.g., in Shop view)
+    if (!createdAtStr) {
+        if (freq === 1) return ['08:00']
+        if (freq === 2) return ['08:00', '20:00']
+        if (freq === 3) return ['08:00', '14:00', '20:00']
+        if (freq === 4) return ['08:00', '12:00', '16:00', '20:00']
+        return []
+    }
+
+    // Convert order creation to IST hour
+    const createdDate = new Date(createdAtStr)
+    // Add 5 hours 30 minutes for IST offset roughly (if createdDate is UTC)
+    // To be precise and robust across environments, we just pull getUTCHours() and add 5.5
+    let currentHour = createdDate.getUTCHours() + 5.5
+    if (currentHour >= 24) currentHour -= 24
+
+    const result: string[] = []
+
+    if (freq === 1) {
+        // Find the First window AFTER the current hour
+        const nextWindow = windows.find(w => w >= currentHour) ?? windows[0]
+        result.push(`${nextWindow.toString().padStart(2, '0')}:00`)
+    }
+    else if (freq === 2) {
+        // Find the nearest window
+        let nextWindow = windows.find(w => w >= currentHour) ?? windows[0]
+        // Often 2/day is morning and night (8 and 20). Just pick the next sequential one in that pair.
+        if (nextWindow === 14) nextWindow = 20
+        result.push(`${nextWindow.toString().padStart(2, '0')}:00`)
+        result.push(`${(nextWindow === 20 ? 8 : 20).toString().padStart(2, '0')}:00`)
+    }
+    else if (freq === 3) {
+        // Collect the next 3 windows cycling through [8, 14, 20]
+        let startIndex = windows.findIndex(w => w >= currentHour)
+        if (startIndex === -1) startIndex = 0
+
+        for (let i = 0; i < 3; i++) {
+            const w = windows[(startIndex + i) % 3]
+            result.push(`${w.toString().padStart(2, '0')}:00`)
+        }
+    }
+    else if (freq === 4) {
+        // Just generic 4 times
+        result.push('08:00', '12:00', '16:00', '20:00')
+    }
+
+    return result
+}
+
+function FreqBadges({ freq, createdAt }: { freq?: number, createdAt?: string }) {
     if (!freq) return <span className="text-xs text-slate-400">—</span>
-    const info = FREQ_LABELS[freq] ?? { label: `${freq}×/day`, times: [] }
+
+    const label = FREQ_LABELS[freq] ?? `${freq}×/day`
+    const times = getNextDoseTimes(freq, createdAt)
+
     return (
         <div className="flex flex-wrap gap-1 mt-1">
             <span className="text-xs font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full">
-                {info.label}
+                {label}
             </span>
-            {info.times.map(t => (
-                <span key={t} className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+            {times.map((t, idx) => (
+                <span key={`${t}-${idx}`} className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full flex items-center gap-1">
                     <Clock className="w-3 h-3" /> {t}
                 </span>
             ))}
@@ -450,7 +506,7 @@ export default function MyMedicines() {
                                                             // SCHEDULED: show schedule + auto-decrement note
                                                             <div>
                                                                 <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Schedule</span>
-                                                                <FreqBadges freq={item.frequency_per_day} />
+                                                                <FreqBadges freq={item.frequency_per_day} createdAt={item.created_at || undefined} />
                                                                 <div className="mt-1.5 flex items-center gap-1 text-[11px] text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg">
                                                                     <CalendarClock className="w-3 h-3" />
                                                                     Auto-deducted at each dose time
@@ -598,7 +654,7 @@ export default function MyMedicines() {
                                                                                 {item.medicines?.strength && (
                                                                                     <p className="text-xs text-slate-500">{item.medicines.strength}</p>
                                                                                 )}
-                                                                                <FreqBadges freq={item.frequency_per_day} />
+                                                                                <FreqBadges freq={item.frequency_per_day} createdAt={order.created_at} />
                                                                                 {item.dosage_text && (
                                                                                     <p className="text-xs text-slate-500 mt-1">{item.dosage_text}</p>
                                                                                 )}
