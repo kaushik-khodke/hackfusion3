@@ -91,7 +91,6 @@ export default function PharmacistDashboard() {
             const { data: nData } = await supabase
                 .from("notification_logs")
                 .select("*")
-                .eq("type", "low_stock")
                 .order("created_at", { ascending: false })
                 .limit(10);
             setNotifications(nData || []);
@@ -130,10 +129,19 @@ export default function PharmacistDashboard() {
 
                 if (items) {
                     for (const item of items) {
-                        await supabase.rpc("decrement_medicine_stock", {
-                            med_id: item.medicine_id,
-                            amount: item.qty
-                        });
+                        // Avoid RPC to ensure it runs without backend functions
+                        const { data: med } = await supabase
+                            .from("medicines")
+                            .select("stock")
+                            .eq("id", item.medicine_id)
+                            .single();
+
+                        if (med) {
+                            await supabase
+                                .from("medicines")
+                                .update({ stock: med.stock - item.qty })
+                                .eq("id", item.medicine_id);
+                        }
                     }
                 }
             }
@@ -156,16 +164,17 @@ export default function PharmacistDashboard() {
         setEditMedStock(med.stock);
     };
 
-    const saveMedicineStock = async (medId: string) => {
+    const saveMedicineStock = async (medId: string, directStockValue?: number) => {
+        const stockToSave = directStockValue !== undefined ? directStockValue : editMedStock;
         try {
             const { error } = await supabase
                 .from("medicines")
-                .update({ stock: editMedStock })
+                .update({ stock: stockToSave })
                 .eq("id", medId);
 
             if (!error) {
                 // local update (realtime will also catch it, but this makes it instantly snappy)
-                setAllMedicines(allMedicines.map(m => m.id === medId ? { ...m, stock: editMedStock } : m));
+                setAllMedicines(allMedicines.map(m => m.id === medId ? { ...m, stock: stockToSave } : m));
                 setEditingMedId(null);
             } else {
                 console.error("Failed to update stock:", error);
@@ -282,7 +291,7 @@ export default function PharmacistDashboard() {
                                 </div>
                                 <div>
                                     <p className="text-sm font-medium text-muted-foreground">Refill Alerts</p>
-                                    <p className="text-2xl font-bold text-amber-600">{refillAlerts.length}</p>
+                                    <p className="text-2xl font-bold text-amber-600">{lowStockMeds.length}</p>
                                 </div>
                             </div>
                         </CardContent>
@@ -341,7 +350,7 @@ export default function PharmacistDashboard() {
                         </CardHeader>
                         <CardContent className="flex-1 overflow-y-auto p-0">
                             <div className="divide-y divide-border">
-                                {orders.slice(0, 10).map(o => (
+                                {orders.slice(0, 6).map(o => (
                                     <div key={o.id} className="p-4 hover:bg-muted/30 transition-colors flex flex-col gap-2">
                                         <div className="flex justify-between items-start">
                                             <h4 className="font-semibold text-sm">{o.patients?.full_name}</h4>
@@ -379,15 +388,33 @@ export default function PharmacistDashboard() {
                         </CardHeader>
                         <CardContent className="p-0">
                             <div className="divide-y divide-border max-h-[300px] overflow-y-auto">
-                                {refillAlerts.length > 0 ? refillAlerts.map(alert => (
-                                    <div key={alert.id} className="p-4 flex justify-between items-center hover:bg-amber-50/30 transition-colors">
+                                {lowStockMeds.length > 0 ? lowStockMeds.map(med => (
+                                    <div
+                                        key={med.id}
+                                        className="p-4 flex justify-between items-center hover:bg-amber-50/30 transition-colors cursor-pointer group"
+                                        onClick={() => {
+                                            const amount = window.prompt(`Amount to refill for ${med.name}?`);
+                                            if (amount && !isNaN(Number(amount))) {
+                                                const numericAmount = Number(amount);
+                                                if (numericAmount > 0) {
+                                                    const newStock = med.stock + numericAmount;
+                                                    setEditingMedId(med.id);
+                                                    setEditMedStock(newStock);
+                                                    saveMedicineStock(med.id, newStock);
+                                                }
+                                            }
+                                        }}
+                                    >
                                         <div>
-                                            <h4 className="font-medium text-sm text-foreground">{alert.patients?.full_name}</h4>
-                                            <p className="text-xs text-muted-foreground mt-1">Medication: {alert.medicines?.name}</p>
+                                            <h4 className="font-medium text-sm text-foreground group-hover:text-amber-700 transition-colors flex items-center gap-2">
+                                                {med.name}
+                                                <Edit2 className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                            </h4>
+                                            <p className="text-xs text-muted-foreground mt-1">Current Stock: {med.stock}</p>
                                         </div>
                                         <div className="text-right">
-                                            <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-200 font-medium">
-                                                Runs out: {new Date(alert.predicted_runout_date).toLocaleDateString()}
+                                            <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-200 font-medium whitespace-nowrap">
+                                                Tap to Refill
                                             </Badge>
                                         </div>
                                     </div>
@@ -427,27 +454,61 @@ export default function PharmacistDashboard() {
             </div>
 
             {/* System Notifications */}
-            <motion.div variants={itemVariants}>
-                <Card>
-                    <CardHeader>
-                        <CardTitle>System Notifications Log</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="space-y-2">
-                            {notifications.map(n => (
-                                <div key={n.id} className="p-3 text-sm bg-muted/40 rounded flex justify-between items-center">
-                                    <div>
-                                        <Badge variant="outline" className="mr-2 border-red-300 text-red-600">Low Stock Alert</Badge>
-                                        <span>{n.payload?.medicine_name} is critically low (Stock: {n.payload?.current_stock})</span>
-                                    </div>
-                                    <span className="text-xs text-muted-foreground">{new Date(n.created_at).toLocaleString()}</span>
-                                </div>
-                            ))}
-                            {notifications.length === 0 && <p className="text-sm text-muted-foreground">No recent alerts.</p>}
-                        </div>
-                    </CardContent>
-                </Card>
-            </motion.div>
+            {notifications.length > 0 && (
+                <motion.div variants={itemVariants}>
+                    <Card>
+                        <CardHeader>
+                            <CardTitle>System Notifications Log</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="space-y-2">
+                                {notifications.map(n => {
+                                    const isAlert = n.type === 'low_stock' || n.type === 'refill_alert';
+                                    const isOrder = n.type === 'order_confirmation';
+
+                                    return (
+                                        <div key={n.id} className="p-3 text-sm bg-muted/40 rounded flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                                            <div className="flex items-start sm:items-center gap-3">
+                                                {isAlert ? (
+                                                    <Badge variant="outline" className="border-amber-300 text-amber-600 shrink-0 whitespace-nowrap">
+                                                        <AlertTriangle className="w-3 h-3 mr-1" />
+                                                        {n.type === 'low_stock' ? 'Inventory Alert' : 'Refill Alert'}
+                                                    </Badge>
+                                                ) : isOrder ? (
+                                                    <Badge variant="outline" className="border-green-300 text-green-600 shrink-0 whitespace-nowrap">
+                                                        <CheckCircle className="w-3 h-3 mr-1" />
+                                                        Order Confirmed
+                                                    </Badge>
+                                                ) : (
+                                                    <Badge variant="outline" className="border-blue-300 text-blue-600 shrink-0 whitespace-nowrap">
+                                                        System Event
+                                                    </Badge>
+                                                )}
+
+                                                <span className="text-foreground">
+                                                    {n.type === 'low_stock' && (
+                                                        <>{n.payload?.medicine_name} is critically low (Stock: <span className="font-bold text-red-500">{n.payload?.current_stock}</span>).</>
+                                                    )}
+                                                    {n.type === 'refill_alert' && (
+                                                        <>{n.payload?.patient_name} needs a refill of {n.payload?.medicine_name} soon.</>
+                                                    )}
+                                                    {n.type === 'order_confirmation' && (
+                                                        <>Order placed for {n.payload?.medicine_name} (Qty: {n.payload?.qty}).</>
+                                                    )}
+                                                    {!['low_stock', 'refill_alert', 'order_confirmation'].includes(n.type) && (
+                                                        <>Event logged type: {n.type}</>
+                                                    )}
+                                                </span>
+                                            </div>
+                                            <span className="text-xs text-muted-foreground shrink-0">{new Date(n.created_at).toLocaleString()}</span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </CardContent>
+                    </Card>
+                </motion.div>
+            )}
 
             {/* Raw Order History Table */}
             <motion.div variants={itemVariants}>

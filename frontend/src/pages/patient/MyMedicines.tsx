@@ -261,6 +261,13 @@ export default function MyMedicines() {
     }
     const cabinet = Array.from(medMap.values())
 
+    // ── Pre-calculate critically low stock (qty <= 2) ────────────────
+    const lowStockItems = cabinet.filter(item => {
+        const remaining = localQty[item.id] !== undefined ? localQty[item.id] : item.qty
+        // Consider low stock if they have strictly 1 or 2 left
+        return remaining > 0 && remaining <= 2
+    })
+
     // ── Handle Add to cart: gate Rx medicines behind upload modal ────
     function handleAddToCartWithFreq(med: Medicine, freq?: number, dosage?: string) {
         if (med.prescription_required) {
@@ -358,6 +365,32 @@ export default function MyMedicines() {
         }
     }
 
+    // ── Quick Refill (Add to Cart) ──────────────────
+    function handleQuickRefill() {
+        if (!user?.id || lowStockItems.length === 0) return
+
+        // Push all low-stock items into the cart (if not already present)
+        setCart(prevCart => {
+            const newCart = [...prevCart]
+            lowStockItems.forEach(item => {
+                const med = item.medicines
+                const alreadyInCart = newCart.some(c => c.medicine.id === med.id)
+                if (!alreadyInCart) {
+                    newCart.push({
+                        medicine: med,
+                        qty: 1, // Start with 1 unit for the cart
+                        freq: item.frequency_per_day,
+                        dosage: item.dosage_text
+                    })
+                }
+            })
+            return newCart
+        })
+
+        // Redirect to the shop tab
+        setTab('shop')
+    }
+
     // ── Take a dose (as-needed) ──────────────────────────
     async function takeDose(orderItemId: string, currentQty: number) {
         if (!user?.id || currentQty <= 0) return
@@ -445,89 +478,123 @@ export default function MyMedicines() {
                                 <p className="text-sm mt-1">Place your first order from the Shop tab</p>
                             </div>
                         ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                                {cabinet.map(item => {
-                                    const isAsNeeded = !item.frequency_per_day ||
-                                        (item.dosage_text?.toLowerCase().includes('as needed') ?? false) ||
-                                        (item.dosage_text?.toLowerCase().includes('prn') ?? false)
-                                    const remainingQty = localQty[item.id] ?? item.qty
-                                    const isTaking = takingDose[item.id] ?? false
-                                    const isEmpty = remainingQty <= 0
+                            <div className="flex flex-col gap-6">
+                                {/* Low Stock Alert Banner */}
+                                {lowStockItems.length > 0 && (
+                                    <motion.div
+                                        initial={{ opacity: 0, y: -10 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm"
+                                    >
+                                        <div className="flex items-start gap-3">
+                                            <div className="p-2 bg-amber-100/50 rounded-xl mt-0.5">
+                                                <AlertCircle className="w-5 h-5 text-amber-600" />
+                                            </div>
+                                            <div>
+                                                <h3 className="text-amber-800 font-bold text-sm">Refill Required Soon</h3>
+                                                <p className="text-amber-700/80 text-xs mt-0.5 leading-relaxed">
+                                                    You have 2 or fewer doses remaining for: <br className="sm:hidden" />
+                                                    <span className="font-semibold text-amber-800">
+                                                        {lowStockItems.map(i => i.medicines.name).join(', ')}.
+                                                    </span>
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <Button
+                                            size="sm"
+                                            onClick={handleQuickRefill}
+                                            className="bg-amber-600 hover:bg-amber-700 text-white shadow-sm shadow-amber-200 xl:w-fit w-full whitespace-nowrap"
+                                        >
+                                            <ShoppingCart className="w-4 h-4 mr-1.5" />
+                                            Add Refills to Cart
+                                        </Button>
+                                    </motion.div>
+                                )}
 
-                                    return (
-                                        <motion.div key={item.medicines.id} layout>
-                                            <Card className={`rounded-2xl border border-slate-100/80 backdrop-blur-sm shadow-sm hover:shadow-md transition-all ${isEmpty ? 'opacity-50 bg-slate-50' : 'bg-white/80'
-                                                }`}>
-                                                <CardContent className="p-5">
-                                                    <div className="flex items-start justify-between gap-2 mb-3">
-                                                        <div>
-                                                            <h3 className="font-bold text-slate-800 leading-tight">{item.medicines.name}</h3>
-                                                            {item.medicines.strength && (
-                                                                <p className="text-xs text-slate-500 mt-0.5">{item.medicines.strength} · {item.medicines.unit_type ?? ''}</p>
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                                    {cabinet.map(item => {
+                                        const isAsNeeded = !item.frequency_per_day ||
+                                            (item.dosage_text?.toLowerCase().includes('as needed') ?? false) ||
+                                            (item.dosage_text?.toLowerCase().includes('prn') ?? false)
+                                        const remainingQty = localQty[item.id] ?? item.qty
+                                        const isTaking = takingDose[item.id] ?? false
+                                        const isEmpty = remainingQty <= 0
+
+                                        return (
+                                            <motion.div key={item.medicines.id} layout>
+                                                <Card className={`rounded-2xl border border-slate-100/80 backdrop-blur-sm shadow-sm hover:shadow-md transition-all ${isEmpty ? 'opacity-50 bg-slate-50' : 'bg-white/80'
+                                                    }`}>
+                                                    <CardContent className="p-5">
+                                                        <div className="flex items-start justify-between gap-2 mb-3">
+                                                            <div>
+                                                                <h3 className="font-bold text-slate-800 leading-tight">{item.medicines.name}</h3>
+                                                                {item.medicines.strength && (
+                                                                    <p className="text-xs text-slate-500 mt-0.5">{item.medicines.strength} · {item.medicines.unit_type ?? ''}</p>
+                                                                )}
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <span className={`text-2xl font-black ${isEmpty ? 'text-red-400' : 'text-indigo-600'}`}>
+                                                                    {remainingQty}×
+                                                                </span>
+                                                                {isEmpty && <p className="text-[10px] text-red-400 font-semibold">Out of stock</p>}
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="space-y-2 text-sm">
+                                                            {item.dosage_text && (
+                                                                <p className="text-slate-600">
+                                                                    <span className="font-semibold">Dosage:</span> {item.dosage_text}
+                                                                </p>
+                                                            )}
+
+                                                            {isAsNeeded ? (
+                                                                // AS-NEEDED: show Taken button
+                                                                <div className="flex items-center gap-2 mt-2">
+                                                                    <span className="text-xs bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
+                                                                        <Zap className="w-3 h-3" /> As needed
+                                                                    </span>
+                                                                    <button
+                                                                        onClick={() => takeDose(item.id, remainingQty)}
+                                                                        disabled={isTaking || isEmpty}
+                                                                        className={`ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${isEmpty
+                                                                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                                                            : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm shadow-indigo-300/40 active:scale-95'
+                                                                            }`}
+                                                                    >
+                                                                        {isTaking
+                                                                            ? <Loader2 className="w-3 h-3 animate-spin" />
+                                                                            : <Pill className="w-3 h-3" />
+                                                                        }
+                                                                        Taken
+                                                                    </button>
+                                                                </div>
+                                                            ) : (
+                                                                // SCHEDULED: show schedule + auto-decrement note
+                                                                <div>
+                                                                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Schedule</span>
+                                                                    <FreqBadges freq={item.frequency_per_day} createdAt={item.created_at || undefined} />
+                                                                    <div className="mt-1.5 flex items-center gap-1 text-[11px] text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg">
+                                                                        <CalendarClock className="w-3 h-3" />
+                                                                        Auto-deducted at each dose time
+                                                                    </div>
+                                                                </div>
+                                                            )}
+
+                                                            {item.days_supply && (
+                                                                <p className="text-xs text-slate-500">{item.days_supply}-day supply</p>
+                                                            )}
+                                                            {item.medicines.prescription_required && (
+                                                                <div className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded-lg">
+                                                                    <ShieldCheck className="w-3 h-3" /> Prescription required
+                                                                </div>
                                                             )}
                                                         </div>
-                                                        <div className="text-right">
-                                                            <span className={`text-2xl font-black ${isEmpty ? 'text-red-400' : 'text-indigo-600'}`}>
-                                                                {remainingQty}×
-                                                            </span>
-                                                            {isEmpty && <p className="text-[10px] text-red-400 font-semibold">Out of stock</p>}
-                                                        </div>
-                                                    </div>
-
-                                                    <div className="space-y-2 text-sm">
-                                                        {item.dosage_text && (
-                                                            <p className="text-slate-600">
-                                                                <span className="font-semibold">Dosage:</span> {item.dosage_text}
-                                                            </p>
-                                                        )}
-
-                                                        {isAsNeeded ? (
-                                                            // AS-NEEDED: show Taken button
-                                                            <div className="flex items-center gap-2 mt-2">
-                                                                <span className="text-xs bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full font-semibold flex items-center gap-1">
-                                                                    <Zap className="w-3 h-3" /> As needed
-                                                                </span>
-                                                                <button
-                                                                    onClick={() => takeDose(item.id, remainingQty)}
-                                                                    disabled={isTaking || isEmpty}
-                                                                    className={`ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${isEmpty
-                                                                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                                                                        : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm shadow-indigo-300/40 active:scale-95'
-                                                                        }`}
-                                                                >
-                                                                    {isTaking
-                                                                        ? <Loader2 className="w-3 h-3 animate-spin" />
-                                                                        : <Pill className="w-3 h-3" />
-                                                                    }
-                                                                    Taken
-                                                                </button>
-                                                            </div>
-                                                        ) : (
-                                                            // SCHEDULED: show schedule + auto-decrement note
-                                                            <div>
-                                                                <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Schedule</span>
-                                                                <FreqBadges freq={item.frequency_per_day} createdAt={item.created_at || undefined} />
-                                                                <div className="mt-1.5 flex items-center gap-1 text-[11px] text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg">
-                                                                    <CalendarClock className="w-3 h-3" />
-                                                                    Auto-deducted at each dose time
-                                                                </div>
-                                                            </div>
-                                                        )}
-
-                                                        {item.days_supply && (
-                                                            <p className="text-xs text-slate-500">{item.days_supply}-day supply</p>
-                                                        )}
-                                                        {item.medicines.prescription_required && (
-                                                            <div className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded-lg">
-                                                                <ShieldCheck className="w-3 h-3" /> Prescription required
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </CardContent>
-                                            </Card>
-                                        </motion.div>
-                                    )
-                                })}
+                                                    </CardContent>
+                                                </Card>
+                                            </motion.div>
+                                        )
+                                    })}
+                                </div>
                             </div>
                         )}
                     </motion.div>

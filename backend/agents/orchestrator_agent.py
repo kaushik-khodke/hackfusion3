@@ -27,15 +27,18 @@ TOOLS = [
                 "description": (
                     "Search medicines, verify prescriptions, place or check orders. "
                     "Use action='search' to look up a medicine. "
-                    "Use action='order' to purchase/refill a medicine (will check prescription automatically). "
-                    "Set qty to the number of units (default 1)."
+                    "Use action='order' to purchase/refill a single medicine (will check prescription automatically). "
+                    "Use action='order_from_prescription' to read a patient's uploaded prescription document and automatically order ALL medicines listed inside it in one bulk order. "
+                    "Set qty to the number of units (default 1). For 'order_from_prescription', qty is ignored."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "action": {"type": "string", "enum": ["search", "order"], "description": "search or order"},
-                        "query":  {"type": "string", "description": "Medicine name or partial name"},
+                        "action": {"type": "string", "enum": ["search", "order", "order_from_prescription"], "description": "search, order, or order_from_prescription"},
+                        "query":  {"type": "string", "description": "Medicine name, partial name, OR the name of the prescription record to read"},
                         "qty":    {"type": "integer", "description": "Number of units to order (default 1)"},
+                        "frequency_per_day": {"type": "integer", "description": "Number of times per day to take the medicine, if specified by user"},
+                        "dosage_text": {"type": "string", "description": "Specific dosage instructions like 'after meals' or '500mg', if specified by user"},
                     },
                     "required": ["action", "query"],
                 },
@@ -144,8 +147,14 @@ class OrchestratorAgent:
         base_ctx = {"user_id": user_id}
 
         if tool_name == "call_pharmacy_agent":
-            ctx = {**base_ctx, "action": args.get("action", "search"),
-                   "query": args.get("query", ""), "qty": args.get("qty", 1)}
+            ctx = {
+                **base_ctx, 
+                "action": args.get("action", "search"),
+                "query": args.get("query", ""), 
+                "qty": args.get("qty", 1),
+                "frequency_per_day": args.get("frequency_per_day"),
+                "dosage_text": args.get("dosage_text")
+            }
             return await self.pharmacy.run(args.get("query", ""), ctx)
 
         if tool_name == "call_refill_agent":
