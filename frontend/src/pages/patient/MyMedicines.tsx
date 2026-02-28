@@ -64,6 +64,8 @@ interface Order {
 interface CartItem {
     medicine: Medicine
     qty: number
+    freq?: number
+    dosage?: string
 }
 
 // ─── Helpers ──────────────────────────────────────────
@@ -136,7 +138,11 @@ export default function MyMedicines() {
     // History filter
     const [historyFilter, setHistoryFilter] = useState<'all' | 'active' | 'completed'>('all')
     // Rx upload modal
-    const [rxModal, setRxModal] = useState<{ open: boolean; medicine: Medicine | null }>({
+    const [rxModal, setRxModal] = useState<{ open: boolean; medicine: Medicine | null; freq?: number; dosage?: string }>({
+        open: false, medicine: null
+    })
+    // Freq modal
+    const [freqModal, setFreqModal] = useState<{ open: boolean; medicine: Medicine | null }>({
         open: false, medicine: null
     })
     const [rxFile, setRxFile] = useState<File | null>(null)
@@ -184,25 +190,29 @@ export default function MyMedicines() {
         .flatMap(o => o.items)
         .filter(i => i.medicines)
 
-    // Consolidate duplicates — keep per-medicine item with highest id (latest)
+    // Consolidate duplicates — keep per-medicine/dosage item with highest id (latest)
     const medMap = new Map<string, OrderItem>()
     for (const item of activeMeds) {
-        const key = item.medicines.id
+        // Group by medicine ID and frequency/dosage so different regimens stay separate
+        const key = `${item.medicines.id}_${item.frequency_per_day}_${item.dosage_text}`
         if (!medMap.has(key)) {
             medMap.set(key, { ...item, qty: 0 })
         }
         medMap.get(key)!.qty += item.qty
+        // Keep the latest order item ID to ensure the Take Dose button works correctly
+        // for the most recently fulfilled order_item representing this regimen.
+        medMap.get(key)!.id = item.id
     }
     const cabinet = Array.from(medMap.values())
 
     // ── Handle Add to cart: gate Rx medicines behind upload modal ────
-    function handleAddToCart(med: Medicine) {
+    function handleAddToCartWithFreq(med: Medicine, freq?: number, dosage?: string) {
         if (med.prescription_required) {
-            setRxModal({ open: true, medicine: med })
+            setRxModal({ open: true, medicine: med, freq, dosage })
             setRxFile(null)
             setRxModalResult(null)
         } else {
-            addToCart(med)
+            addToCart(med, freq, dosage)
         }
     }
 
@@ -221,8 +231,8 @@ export default function MyMedicines() {
             if (data.valid) {
                 setRxModalResult({ valid: true, message: data.message })
                 setTimeout(() => {
-                    addToCart(rxModal.medicine!)
-                    setRxModal({ open: false, medicine: null })
+                    addToCart(rxModal.medicine!, rxModal.freq, rxModal.dosage)
+                    setRxModal({ open: false, medicine: null, freq: undefined, dosage: undefined })
                     setRxFile(null)
                     setRxModalResult(null)
                 }, 1200)
@@ -237,11 +247,11 @@ export default function MyMedicines() {
     }
 
     // ── addToCart (no Rx gating — handled by handleAddToCart) ────────
-    function addToCart(med: Medicine) {
+    function addToCart(med: Medicine, freq?: number, dosage?: string) {
         setCart(prev => {
             const ex = prev.find(c => c.medicine.id === med.id)
-            if (ex) return prev.map(c => c.medicine.id === med.id ? { ...c, qty: c.qty + 1 } : c)
-            return [...prev, { medicine: med, qty: 1 }]
+            if (ex) return prev.map(c => c.medicine.id === med.id ? { ...c, qty: c.qty + 1, freq, dosage } : c)
+            return [...prev, { medicine: med, qty: 1, freq, dosage }]
         })
     }
     function changeQty(id: string, delta: number) {
@@ -266,7 +276,12 @@ export default function MyMedicines() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     patient_id: user.id,
-                    items: cart.map(c => ({ medicine_id: c.medicine.id, qty: c.qty })),
+                    items: cart.map(c => ({
+                        medicine_id: c.medicine.id,
+                        qty: c.qty,
+                        frequency_per_day: c.freq,
+                        dosage_text: c.dosage
+                    })),
                 }),
             })
             const data = await res.json()
@@ -668,7 +683,7 @@ export default function MyMedicines() {
                                                                 ) : (
                                                                     <Button
                                                                         size="sm"
-                                                                        onClick={() => handleAddToCart(med)}
+                                                                        onClick={() => setFreqModal({ open: true, medicine: med })}
                                                                         className="rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-3 h-8 gap-1"
                                                                     >
                                                                         <Plus className="w-3 h-3" /> Add
@@ -888,6 +903,58 @@ export default function MyMedicines() {
                                             ) : 'Verify & Add'}
                                         </Button>
                                     </div>
+                                </div>
+                            </div>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ─── Frequency Selection Modal ───────────────────────────────── */}
+            <AnimatePresence>
+                {freqModal.open && freqModal.medicine && (
+                    <motion.div
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm"
+                    >
+                        <motion.div
+                            initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+                            className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden relative"
+                        >
+                            <button
+                                onClick={() => setFreqModal({ open: false, medicine: null })}
+                                className="absolute right-4 top-4 p-2 text-slate-400 hover:bg-slate-100 rounded-full transition-colors"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+
+                            <div className="p-6">
+                                <div className="w-12 h-12 bg-indigo-100 rounded-2xl flex items-center justify-center mb-4">
+                                    <Clock className="w-6 h-6 text-indigo-600" />
+                                </div>
+                                <h2 className="text-xl font-bold text-slate-800 mb-2">Select Frequency</h2>
+                                <p className="text-slate-600 text-sm mb-6">
+                                    How often will you take <span className="font-bold text-slate-800">{freqModal.medicine.name}</span>?
+                                </p>
+
+                                <div className="space-y-2">
+                                    {[
+                                        { label: 'Once a day', freq: 1, dosage: 'Once a day' },
+                                        { label: 'Twice a day', freq: 2, dosage: 'Twice a day' },
+                                        { label: 'Three times a day', freq: 3, dosage: 'Three times a day' },
+                                        { label: 'As required or needed', freq: 0, dosage: 'As needed' },
+                                    ].map((opt) => (
+                                        <button
+                                            key={opt.label}
+                                            onClick={() => {
+                                                handleAddToCartWithFreq(freqModal.medicine!, opt.freq, opt.dosage)
+                                                setFreqModal({ open: false, medicine: null })
+                                            }}
+                                            className="w-full text-left p-4 rounded-2xl border border-slate-200 hover:border-indigo-500 hover:bg-indigo-50 transition-colors"
+                                        >
+                                            <p className="font-semibold text-slate-800">{opt.label}</p>
+                                        </button>
+                                    ))}
                                 </div>
                             </div>
                         </motion.div>

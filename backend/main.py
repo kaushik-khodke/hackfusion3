@@ -180,6 +180,8 @@ async def manual_order(request: ManualOrderRequest):
         for item in request.items:
             med_id = item.get("medicine_id")
             qty = max(1, int(item.get("qty", 1)))
+            freq = item.get("frequency_per_day")
+            dosage = item.get("dosage_text", "As directed")
 
             med = sb.table("medicines").select(
                 "id,name,stock,prescription_required"
@@ -205,7 +207,7 @@ async def manual_order(request: ManualOrderRequest):
                 errors.append(f"Not enough stock for {m['name']} (available: {m['stock']})")
                 continue
 
-            valid_items.append({"med": m, "qty": qty})
+            valid_items.append({"med": m, "qty": qty, "freq": freq, "dosage": dosage})
 
         if not valid_items:
             return {"success": False, "error": "; ".join(errors) if errors else "No valid items"}
@@ -225,8 +227,8 @@ async def manual_order(request: ManualOrderRequest):
                 "order_id": order_id,
                 "medicine_id": i["med"]["id"],
                 "qty": i["qty"],
-                "dosage_text": "As directed",
-                "frequency_per_day": 1,
+                "dosage_text": i["dosage"],
+                "frequency_per_day": i["freq"],
                 "days_supply": 30,
             }).execute()
 
