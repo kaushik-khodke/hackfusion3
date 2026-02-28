@@ -1,0 +1,10 @@
+[
+  {
+    "id": "1f314341-dd8a-49fe-b6fa-5a53c981a5a8",
+    "patient_id": "4720f774-69e0-4485-9b88-6f14cf8c287f",
+    "medicine_id": "9f18fae3-a31b-49fe-bd8e-2ef13a9dcdf5",
+    "predicted_runout_date": "2026-03-01",
+    "status": "pending",
+    "created_at": "2026-02-14T22:37:26.111993+00:00"
+  }
+]

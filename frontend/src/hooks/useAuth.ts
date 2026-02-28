@@ -41,12 +41,12 @@ export function useAuth() {
         const role = mData.role || 'patient';
         const { data: newProfile, error: insertError } = await supabase
           .from('profiles')
-          .insert({
+          .upsert({
             id: userId,
             role: role === 'hospital' ? 'doctor' : role,
             full_name: mData.full_name || 'New User',
             phone: mData.phone || ''
-          })
+          }, { onConflict: 'id' })
           .select()
           .single();
 

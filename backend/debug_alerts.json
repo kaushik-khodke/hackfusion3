@@ -1,0 +1,57 @@
+[
+  {
+    "id": "87cecf85-f577-4818-b8c9-74b87dc8ecaa",
+    "patient_id": "4720f774-69e0-4485-9b88-6f14cf8c287f",
+    "channel": "whatsapp",
+    "type": "order_confirmation",
+    "payload": {
+      "message": "Test notification"
+    },
+    "status": "queued",
+    "created_at": "2026-02-14T22:37:26.463614+00:00"
+  },
+  {
+    "id": "ab98331a-d474-4850-94f5-d48e707062a5",
+    "patient_id": "e80333d2-4d4a-47b2-949f-996969401124",
+    "channel": "app",
+    "type": "order_confirmation",
+    "payload": {
+      "items": [
+        {
+          "qty": 1.0,
+          "name": "Nurofen 200 mg Schmelztabletten Lemon"
+        }
+      ],
+      "status": "fulfilled",
+      "order_id": "50087eb8-6d1c-4e1a-b0cd-c204b325833d"
+    },
+    "status": "sent",
+    "created_at": "2026-02-28T16:26:19.857997+00:00"
+  },
+  {
+    "id": "d531b80f-64fc-4fea-99ed-08fe000471a1",
+    "patient_id": "e80333d2-4d4a-47b2-949f-996969401124",
+    "channel": "app",
+    "type": "order_confirmation",
+    "payload": {
+      "message": "Your order for Nurofen 200 mg Schmelztabletten Lemon has been placed.",
+      "order_id": "e0432308-c9e8-4c34-9a9a-e0f0b6b106fe"
+    },
+    "status": "sent",
+    "created_at": "2026-02-28T16:28:04.878681+00:00"
+  },
+  {
+    "id": "46e490d3-0315-488c-976a-84d926255f61",
+    "patient_id": null,
+    "channel": "email",
+    "type": "low_stock",
+    "payload": {
+      "threshold": 10,
+      "medicine_id": "1a14bbfe-3d23-4a8d-bbc3-fadbde06dea5",
+      "current_stock": 5,
+      "medicine_name": "Vigantolvit 2000 I.E. Vitamin D3"
+    },
+    "status": "pending",
+    "created_at": "2026-02-28T17:53:48.969259+00:00"
+  }
+]

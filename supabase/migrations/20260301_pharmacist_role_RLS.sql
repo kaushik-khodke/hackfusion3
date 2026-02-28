@@ -1,6 +1,8 @@
--- 1. Modify the profiles role check constraint to include 'pharmacist'
+-- 1. Add pharmacist to user_role ENUM (Skipped, using CHECK constraint instead)
+
+-- 2. Modify the profiles role check constraint to include 'pharmacist'
 ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_role_check;
-ALTER TABLE public.profiles ADD CONSTRAINT profiles_role_check CHECK (role = ANY (ARRAY['patient'::text, 'doctor'::text, 'admin'::text, 'pharmacist'::text]));
+ALTER TABLE public.profiles ADD CONSTRAINT profiles_role_check CHECK (role::text = ANY (ARRAY['patient'::text, 'doctor'::text, 'admin'::text, 'pharmacist'::text]));
 
 -- 2. Modify the notification_logs type column to allow null payload and status if needed (schema allows null payload, status is text)
 -- 3. Modify orders status check constraint to include 'fulfilled' if it isn't already (Schema already has it: pending, approved, rejected, fulfilled, cancelled)
@@ -92,3 +94,11 @@ CREATE TRIGGER trigger_check_low_stock
   AFTER UPDATE OF stock ON public.medicines
   FOR EACH ROW
   EXECUTE FUNCTION public.check_low_stock();
+
+-- Patients
+ALTER TABLE public.patients ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Pharmacists can view patients" ON public.patients;
+CREATE POLICY "Pharmacists can view patients" ON public.patients
+  FOR SELECT USING (
+    EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'pharmacist')
+  );
