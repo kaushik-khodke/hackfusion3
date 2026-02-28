@@ -217,7 +217,7 @@ export function PharmacyChat() {
             } else {
                 setMessages(prev => [...prev, {
                     id: Date.now().toString(),
-                    text: `⚠️ ${result.error || "I'm having trouble connecting to pharmacy records. Please try again."}`,
+                    text: `⚠️ ${result.response || result.error || "I'm having trouble connecting to pharmacy records. Please try again."}`,
                     isUser: false,
                     timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 }])
