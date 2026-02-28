@@ -65,12 +65,11 @@ export function Signup() {
   const [searchParams] = useSearchParams();
 
   const roleParam = searchParams.get("role");
-  const initialRole: "patient" | "doctor" | "hospital" | "pharmacist" =
+  const initialRole: "patient" | "doctor" | "pharmacist" =
     roleParam === "doctor" ? "doctor" :
-      roleParam === "hospital" ? "hospital" :
-        roleParam === "pharmacist" ? "pharmacist" : "patient";
+      roleParam === "pharmacist" ? "pharmacist" : "patient";
 
-  const [role, setRole] = useState<"patient" | "doctor" | "hospital" | "pharmacist">(initialRole);
+  const [role, setRole] = useState<"patient" | "doctor" | "pharmacist">(initialRole);
   const [isLoading, setIsLoading] = useState(false);
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [pageError, setPageError] = useState<string>("");
@@ -119,11 +118,7 @@ export function Signup() {
 
     setPageError("");
 
-    // Validate hospital name is provided for hospital role
-    if (role === "hospital" && !data.hospital?.trim()) {
-      setPageError("Hospital name is required");
-      return;
-    }
+    setPageError("");
 
     const last = Number(localStorage.getItem("signup_last_ts") || "0");
     const now = Date.now();
@@ -147,7 +142,7 @@ export function Signup() {
             role,
             full_name: data.fullName,
             phone: data.phone,
-            hospital_name: data.hospital, // Sent for both doctor (optional) and hospital (required)
+            hospital_name: data.hospital, // Sent for doctor (optional)
             license_id: data.licenseId,
             address: data.address,
           },
@@ -176,7 +171,7 @@ export function Signup() {
       // Only runs if session exists (user is auto-logged in)
       const { error: profileError } = await supabase.from("profiles").insert({
         id: authData.user.id,
-        role: role === 'hospital' ? 'doctor' : role, // Database enum strictly requires 'doctor' or 'patient'
+        role: role,
         full_name: data.fullName,
         phone: data.phone,
       });
@@ -185,8 +180,8 @@ export function Signup() {
         throw new Error("Failed to create profile: " + profileError.message);
       }
 
-      // If doctor or hospital, insert specific record types
-      if (role === "doctor" || role === "hospital") {
+      // If doctor, insert specific record types
+      if (role === "doctor") {
         const { error: docError } = await supabase.from("doctors").insert({
           id: authData.user.id,
           hospital: data.hospital,
@@ -274,8 +269,6 @@ export function Signup() {
                 <div className="h-12 w-12 rounded-xl bg-gradient-to-br from-primary/20 to-teal-500/20 flex items-center justify-center">
                   {role === "doctor" ? (
                     <Stethoscope className="w-6 h-6 text-primary" />
-                  ) : role === "hospital" ? (
-                    <Building2 className="w-6 h-6 text-primary" />
                   ) : role === "pharmacist" ? (
                     <BadgeCheck className="w-6 h-6 text-primary" />
                   ) : (
@@ -322,18 +315,6 @@ export function Signup() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setRole("hospital")}
-                  disabled={isLoading}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-all ${role === "hospital"
-                    ? "bg-background text-foreground shadow-sm border border-border/60"
-                    : "text-muted-foreground hover:text-foreground"
-                    }`}
-                >
-                  <Building2 className="h-4 w-4" />
-                  Hospital
-                </button>
-                <button
-                  type="button"
                   onClick={() => setRole("pharmacist")}
                   disabled={isLoading}
                   className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-all ${role === "pharmacist"
@@ -372,12 +353,12 @@ export function Signup() {
                   <motion.div variants={item} className="grid grid-cols-1 md:grid-cols-2 gap-5">
                     <div>
                       <label className="text-sm font-medium text-foreground block mb-1.5">
-                        {role === "hospital" ? "Contact Person" : "Full name"}
+                        Full name
                       </label>
                       <div className="relative">
                         <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                         <Input
-                          placeholder={role === "hospital" ? "Contact person name" : "Your name"}
+                          placeholder="Your name"
                           className="pl-10 h-11 rounded-xl border-border/80 bg-muted/30 focus:bg-background"
                           {...register("fullName")}
                         />
@@ -471,37 +452,6 @@ export function Signup() {
                             placeholder="License ID"
                             className="pl-10 h-11 rounded-xl border-border/80 bg-muted/30 focus:bg-background"
                             {...register("licenseId")}
-                          />
-                        </div>
-                      </div>
-                    </motion.div>
-                  ) : null}
-
-                  {role === "hospital" ? (
-                    <motion.div variants={item} className="space-y-5">
-                      <div>
-                        <label className="text-sm font-medium text-foreground block mb-1.5">Hospital Name *</label>
-                        <div className="relative">
-                          <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                          <Input
-                            placeholder="Hospital name"
-                            className="pl-10 h-11 rounded-xl border-border/80 bg-muted/30 focus:bg-background"
-                            {...register("hospital")}
-                          />
-                        </div>
-                        {errors.hospital ? (
-                          <p className="text-xs text-destructive mt-1.5">{String(errors.hospital.message)}</p>
-                        ) : null}
-                      </div>
-
-                      <div>
-                        <label className="text-sm font-medium text-foreground block mb-1.5">Address (optional)</label>
-                        <div className="relative">
-                          <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                          <Input
-                            placeholder="Street, City, State, ZIP"
-                            className="pl-10 h-11 rounded-xl border-border/80 bg-muted/30 focus:bg-background"
-                            {...register("address")}
                           />
                         </div>
                       </div>

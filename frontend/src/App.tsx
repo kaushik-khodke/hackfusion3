@@ -20,21 +20,6 @@ const PharmacyChat = React.lazy(() =>
   import("@/pages/patient/PharmacyChat").then((module) => ({ default: module.PharmacyChat }))
 );
 
-/**
- * Hospital pages
- */
-const HospitalDashboard = React.lazy(() => import("@/pages/hospital/Dashboard"));
-const HospitalScan = React.lazy(() =>
-  import("@/pages/hospital/Scan").then((m) => ({ default: m.HospitalScan }))
-);
-const HospitalPatients = React.lazy(() => import("@/pages/hospital/Patients"));
-const HospitalRequests = React.lazy(() => import("@/pages/hospital/Requests"));
-const HospitalProfile = React.lazy(() =>
-  import("@/pages/hospital/Profile").then((m) => ({ default: m.default }))
-);
-
-const DoctorJoinHospital = React.lazy(() => import("@/pages/doctor/JoinHospital"));
-
 const Chat = React.lazy(() =>
   import("@/pages/patient/Chat").then((module) => ({ default: module.Chat }))
 );
@@ -87,7 +72,6 @@ function DashboardRouter() {
   if (loading) return <LoadingSpinner />;
 
   if (role === "doctor") return <DoctorDashboard />;
-  if (role === "hospital") return <HospitalDashboard />;
   if (role === "pharmacist") return <Navigate to="/pharmacist/dashboard" replace />;
 
   // Default fallback if profile is loaded but no other role matched (implies patient)
@@ -203,60 +187,10 @@ function App() {
               }
             />
             <Route
-              path="/doctor/join-hospital"
-              element={
-                <ProtectedRoute>
-                  <DoctorJoinHospital />
-                </ProtectedRoute>
-              }
-            />
-            <Route
               path="/doctor/patient/:patientId"
               element={
                 <ProtectedRoute>
                   <PatientView />
-                </ProtectedRoute>
-              }
-            />
-
-            {/* Hospital */}
-            <Route
-              path="/hospital/dashboard"
-              element={
-                <ProtectedRoute>
-                  <HospitalDashboard />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/hospital/scan"
-              element={
-                <ProtectedRoute>
-                  <HospitalScan />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/hospital/patients"
-              element={
-                <ProtectedRoute>
-                  <HospitalPatients />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/hospital/requests"
-              element={
-                <ProtectedRoute>
-                  <HospitalRequests />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/hospital/profile"
-              element={
-                <ProtectedRoute>
-                  <HospitalProfile />
                 </ProtectedRoute>
               }
             />

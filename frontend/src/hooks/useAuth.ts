@@ -5,7 +5,7 @@ import { useNavigate } from "react-router-dom";
 
 export interface Profile {
   id: string;
-  role: "patient" | "doctor" | "hospital" | "pharmacist";
+  role: "patient" | "doctor" | "pharmacist";
   full_name: string;
   phone: string;
 }
@@ -53,7 +53,7 @@ export function useAuth() {
         if (!insertError && newProfile) {
           data = newProfile;
           // Also auto-create doctors row if needed
-          if (role === 'doctor' || role === 'hospital') {
+          if (role === 'doctor') {
             const { error: dErr } = await supabase.from('doctors').insert({
               id: userId,
               hospital: mData.hospital_name || null,
@@ -63,18 +63,6 @@ export function useAuth() {
           }
         } else {
           console.error("Failed to auto-create profile:", insertError);
-        }
-      }
-      // Check if this doctor is actually a hospital account
-      if (data && data.role === 'doctor') {
-        const { data: docData } = await supabase
-          .from('doctors')
-          .select('hospital')
-          .eq('id', userId)
-          .maybeSingle();
-
-        if (docData && docData.hospital) {
-          data.role = 'hospital';
         }
       }
 

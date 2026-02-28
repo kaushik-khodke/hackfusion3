@@ -231,41 +231,6 @@ export function Navbar() {
           label: t("doctor.scan", { defaultValue: "Scan" }),
           icon: <ShieldCheck className="h-4 w-4" />,
         },
-        {
-          to: "/doctor/join-hospital",
-          label: "Join Hospital",
-          icon: <Building2 className="h-4 w-4" />,
-        },
-      ];
-    }
-
-    if (role === "hospital") {
-      return [
-        {
-          to: "/hospital/dashboard",
-          label: "Dashboard",
-          icon: <Activity className="h-4 w-4" />,
-        },
-        {
-          to: "/hospital/scan",
-          label: "Scan",
-          icon: <QrCode className="h-4 w-4" />,
-        },
-        {
-          to: "/hospital/patients",
-          label: "Patients",
-          icon: <Users className="h-4 w-4" />,
-        },
-        {
-          to: "/hospital/requests",
-          label: "Requests",
-          icon: <ShieldCheck className="h-4 w-4" />,
-        },
-        {
-          to: "/hospital/profile",
-          label: "Profile",
-          icon: <Building2 className="h-4 w-4" />,
-        },
       ];
     }
 
@@ -315,21 +280,12 @@ export function Navbar() {
 
       // doctor
       { label: "Doctor Scan", to: "/doctor/scan", hint: "Request access" },
-      { label: "Join Hospital", to: "/doctor/join-hospital", hint: "Request membership" },
-
-      // hospital
-      { label: "Hospital Dashboard", to: "/hospital/dashboard", hint: "Overview" },
-      { label: "Hospital Scan", to: "/hospital/scan", hint: "Request patient consent" },
-      { label: "Hospital Patients", to: "/hospital/patients", hint: "Approved patients" },
-      { label: "Hospital Requests", to: "/hospital/requests", hint: "Approve doctors" },
-      { label: "Hospital Profile", to: "/hospital/profile", hint: "Hospital UID / QR" },
     ];
 
     return base.filter((i) => {
       if (!user) return i.to === "/dashboard";
-      if (role === "doctor") return !i.to.startsWith("/patient") && !i.to.startsWith("/hospital");
-      if (role === "hospital") return !i.to.startsWith("/patient") && !i.to.startsWith("/doctor");
-      if (role === "patient") return !i.to.startsWith("/doctor") && !i.to.startsWith("/hospital");
+      if (role === "doctor") return !i.to.startsWith("/patient");
+      if (role === "patient") return !i.to.startsWith("/doctor");
       if (role === "pharmacist") return i.to.startsWith("/pharmacist");
       return true;
     });
@@ -599,46 +555,6 @@ export function Navbar() {
                           </Link>
                         </DropdownMenuItem>
                       ) : null}
-
-                      {role === "hospital" ? (
-                        <>
-                          <DropdownMenuItem asChild className="rounded-lg cursor-pointer py-2.5">
-                            <Link to="/hospital/dashboard">
-                              <Activity className="mr-2 h-4 w-4" />
-                              Hospital Dashboard
-                            </Link>
-                          </DropdownMenuItem>
-
-                          <DropdownMenuItem asChild className="rounded-lg cursor-pointer py-2.5">
-                            <Link to="/hospital/scan">
-                              <QrCode className="mr-2 h-4 w-4" />
-                              Scan
-                            </Link>
-                          </DropdownMenuItem>
-
-                          <DropdownMenuItem asChild className="rounded-lg cursor-pointer py-2.5">
-                            <Link to="/hospital/patients">
-                              <Users className="mr-2 h-4 w-4" />
-                              Patients
-                            </Link>
-                          </DropdownMenuItem>
-
-                          <DropdownMenuItem asChild className="rounded-lg cursor-pointer py-2.5">
-                            <Link to="/hospital/requests">
-                              <ShieldCheck className="mr-2 h-4 w-4" />
-                              Requests
-                            </Link>
-                          </DropdownMenuItem>
-
-                          <DropdownMenuItem asChild className="rounded-lg cursor-pointer py-2.5">
-                            <Link to="/hospital/profile">
-                              <Building2 className="mr-2 h-4 w-4" />
-                              Profile
-                            </Link>
-                          </DropdownMenuItem>
-                        </>
-                      ) : null}
-
 
                       <DropdownMenuSeparator className="my-1" />
 
