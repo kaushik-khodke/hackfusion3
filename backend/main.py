@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -73,285 +73,537 @@ class PharmacyChatRequest(BaseModel):
     language: str = "en"
     use_voice: bool = False
 
+class ManualOrderRequest(BaseModel):
+    patient_id: str          # auth.uid()
+    items: list              # [{"medicine_id": str, "qty": int}]
+
 # ==========================================
 # ROUTES
 # ==========================================
-from pharmacy_orchestrator import PharmacyOrchestrator
-pharmacy_orchestrator = PharmacyOrchestrator()
-pharmacy_service = pharmacy_orchestrator.service # For context fetching
 
-@app.post("/pharmacy/chat")
-async def pharmacy_chat(request: PharmacyChatRequest):
+# ---- Medicine / Order helper (shared Supabase client) ----
+def _get_sb():
+    from supabase import create_client
+    return create_client(
+        os.getenv("VITE_SUPABASE_URL"),
+        os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
+    )
+
+@app.get("/my-medicines")
+async def get_my_medicines(patient_id: str):
     """
-    Expert Pharmacy Agent endpoint. 
-    Uses clinical pharmacist persona and pharmacy-specific tools.
+    Returns the patient's active medicine cabinet:
+    - All finalized orders with their order_items joined to medicines
+    - Includes qty, dosage_text, frequency_per_day, days_supply
+    Scoped strictly to the requesting patient via patient_id = auth.uid()
+    resolved to patients.id.
     """
     try:
-        print(f"💊 Pharmacy Query: {request.message}")
-        
-        # 1. Fetch Context
-        profile = await pharmacy_service.get_patient_profile(request.patient_id)
-        health_summary = await pharmacy_service.get_patient_health_summary(request.patient_id)
-        order_history = await pharmacy_service.get_patient_orders(request.patient_id)
-        refill_candidates = await pharmacy_service.get_refill_candidates(request.patient_id)
-        
-        # 2. Build Expert Pharmacist Prompt
-        system_prompt = f"""
-You are the **Expert Pharmacy Agent** for MyHealthChain. 
-You are a **senior clinical pharmacist AI**.
+        sb = _get_sb()
+        # Resolve auth uid → patients.id
+        pt = sb.table("patients").select("id").eq("user_id", patient_id).single().execute()
+        if not pt.data:
+            raise HTTPException(status_code=404, detail="Patient not found")
+        pid = pt.data["id"]
 
-PATIENT PROFILE: {json.dumps(profile)}
-HEALTH SUMMARY: {json.dumps(health_summary)}
-ORDER HISTORY: {json.dumps(order_history)}
-PROACTIVE REFILL ALERTS: {json.dumps(refill_candidates)}
+        # Fetch all orders for this patient (finalized + pending)
+        orders_res = (
+            sb.table("orders")
+            .select("id,status,total_items,channel,created_at,finalized_at")
+            .eq("patient_id", pid)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        orders = orders_res.data or []
 
-YOUR CORE RESPONSIBILITIES:
-1. **Clinical Safety**: Collect age, allergies, chronic conditions, and current meds if not in profile.
-2. **Grounding**: ONLY recommend medicines found in the database. Use tools (search_medicines) to check stock and prescription status.
-3. **Safety Policies**: 
-   - If `prescription_required` is true, explain you need a valid prescription.
-   - Escalate emergencies (chest pain, stroke, etc.) to ER immediately.
-4. **Commerce**: Offer order drafting ONLY after clinical suitability is confirmed.
-5. **Proactive**: If there are refill alerts, mention them if relevant or at the end of the conversation.
-
-TONE: Professional, caring, and authoritative in pharmacy matters.
-
-LANGUAGE REQUIREMENT: 
-- **Conversational Matching**: Prioritize matching the user's conversational language. If the user speaks/types in Hindi or Marathi (even in Roman script/Hinglish/Marathlish, e.g., "Mera naam..."), you MUST respond in that language.
-- **Script Policy**: 
-  - If language is Hindi ('hi') or detected as Hindi -> Use Devanagari script ONLY.
-  - If language is Marathi ('mr') or detected as Marathi -> Use Devanagari script ONLY.
-  - If language is English ('en') and no other language is detected -> Use English.
-- **UI Fallback**: The UI language code is '{request.language}'. Use this as a guide if the user's language is ambiguous.
-- **No Script Mixing**: Do NOT answer in English if the user is using Hindi/Marathi. Translate technical terms only if common, but keep the core response in the matching script.
-
-You have access to tools. If you need to search for a medicine, create an order, or check refills, call the appropriate function.
-"""
-
-        # 3. Initialize Agent with local tools
-        tools = [
-            {
-                "function_declarations": [
-                    {
-                        "name": "get_medicines",
-                        "description": "Search medicines table by name.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {"type": "string", "description": "Medicine name to search for."},
-                                "limit": {"type": "integer"}
-                            },
-                            "required": ["query"]
-                        }
-                    },
-                    {
-                        "name": "get_patient_orders",
-                        "description": "Fetch a patient’s order history.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "patient_id": {"type": "string", "description": "Patient UUID."},
-                                "limit": {"type": "integer"}
-                            },
-                            "required": ["patient_id"]
-                        }
-                    },
-                    {
-                        "name": "create_order_draft",
-                        "description": "Create a draft order and items for a patient.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "patient_id": {"type": "string"},
-                                "channel": {"type": "string"},
-                                "items": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "medicine_id": {"type": "string"},
-                                            "qty": {"type": "integer"},
-                                            "dosage_text": {"type": "string"},
-                                            "frequency_per_day": {"type": "integer"},
-                                            "days_supply": {"type": "integer"}
-                                        }
-                                    }
-                                }
-                            },
-                            "required": ["patient_id", "items"]
-                        }
-                    },
-                    {
-                        "name": "finalize_order",
-                        "description": "Perform final safety + stock check and commit the order.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "order_id": {"type": "string"}
-                            },
-                            "required": ["order_id"]
-                        }
-                    },
-                    
-                    {
-                        "name": "create_refill_alert",
-                        "description": "Store a predicted run-out for proactive outreach.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "patient_id": {"type": "string"},
-                                "medicine_id": {"type": "string"},
-                                "predicted_runout_date": {"type": "string", "description": "YYYY-MM-DD"}
-                            },
-                            "required": ["patient_id", "medicine_id", "predicted_runout_date"]
-                        }
-                    },
-                    {
-                        "name": "get_refill_alerts",
-                        "description": "Fetch pending refill alerts for a patient.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "patient_id": {"type": "string"}
-                            },
-                            "required": ["patient_id"]
-                        }
-                    },
-                    {
-                        "name": "log_notification",
-                        "description": "Insert a notification record.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "patient_id": {"type": "string"},
-                                "channel": {"type": "string"},
-                                "type": {"type": "string"},
-                                "payload": {"type": "object"},
-                                "status": {"type": "string"}
-                            },
-                            "required": ["patient_id", "channel", "type", "payload"]
-                        }
-                    }
-                ]
-            }
-        ]
-
-        # Using gemini-1.5-flash as standardized
-        agent_model = genai.GenerativeModel('gemini-2.5-flash', tools=tools)
-        chat = agent_model.start_chat()
-        
-        # Initial message
-        try:
-            print("🤖 Pharmacy Agent (Using gemini-2.5-flash)")
-            response = chat.send_message(f"{system_prompt}\n\nUSER MESSAGE: {request.message}")
-        except Exception as e:
-            print(f"❌ Gemini Error: {e}")
-            raise e
-        
-        if not response:
-             raise Exception("Failed to get initial response from Gemini")
-
-        # Robust Tool Loop
-        max_iterations = 5
-        iteration = 0
-        
-        while iteration < max_iterations:
-            # Check if there's a function call
-            if not response.candidates[0].content.parts[0].function_call:
-                break
-                
-            fc = response.candidates[0].content.parts[0].function_call
-            tool_name = fc.name
-            args = fc.args
-            
-            print(f"🛠️ Calling Tool: {tool_name} with {args}")
-            
-            tool_result = None
-            try:
-                # Direct dispatch to orchestrator which handles parameter parsing
-                if tool_name == "get_medicines":
-                    tool_result = await pharmacy_orchestrator.get_medicines(args)
-                elif tool_name == "get_patient_orders":
-                    tool_result = await pharmacy_orchestrator.get_patient_orders(args)
-                elif tool_name == "create_order_draft":
-                    tool_result = await pharmacy_orchestrator.create_order_draft(args)
-                elif tool_name == "finalize_order":
-                    tool_result = await pharmacy_orchestrator.finalize_order(args)
-                elif tool_name == "create_refill_alert":
-                    tool_result = await pharmacy_orchestrator.create_refill_alert(args)
-                elif tool_name == "get_refill_alerts":
-                    tool_result = await pharmacy_orchestrator.get_refill_alerts(args)
-                elif tool_name == "log_notification":
-                    tool_result = await pharmacy_orchestrator.log_notification(args)
-                else:
-                    tool_result = {"error": f"Tool {tool_name} not found."}
-            except Exception as tool_err:
-                print(f"❌ Tool Error ({tool_name}): {tool_err}")
-                tool_result = {"error": str(tool_err)}
-
-            # Send tool response
-            try:
-                response = chat.send_message(
-                    genai.protos.Content(
-                        parts=[genai.protos.Part(
-                            function_response=genai.protos.FunctionResponse(
-                                name=tool_name,
-                                response={'result': tool_result}
-                            )
-                        )]
-                    )
+        enriched = []
+        for order in orders:
+            items_res = (
+                sb.table("order_items")
+                .select(
+                    "id,qty,dosage_text,frequency_per_day,days_supply,"
+                    "medicines(id,name,strength,unit_type,prescription_required,price_rec)"
                 )
-            except Exception as e:
-                print(f"❌ Tool Loop Error: {e}")
-                raise e
-            
-            iteration += 1
+                .eq("order_id", order["id"])
+                .execute()
+            )
+            order["items"] = items_res.data or []
+            enriched.append(order)
 
-        ai_text = response.text
+        return {"success": True, "orders": enriched}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-        # Generate voice if requested
+
+@app.get("/available-medicines")
+async def get_available_medicines(search: str = "", limit: int = 50):
+    """Return medicines catalogue with stock > 0, optionally filtered by name."""
+    try:
+        sb = _get_sb()
+        q = sb.table("medicines").select(
+            "id,name,strength,unit_type,stock,prescription_required,price_rec,description"
+        ).gt("stock", 0).limit(limit)
+        if search:
+            q = q.ilike("name", f"%{search}%")
+        res = q.execute()
+        return {"success": True, "medicines": res.data or []}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/manual-order")
+async def manual_order(request: ManualOrderRequest):
+    """
+    Create and finalize a manual order for a patient.
+    Checks stock availability and prescription requirement.
+    Decrements stock via decrement_medicine_stock RPC.
+    """
+    try:
+        sb = _get_sb()
+        # Resolve auth uid → patients.id
+        pt = sb.table("patients").select("id").eq("user_id", request.patient_id).single().execute()
+        if not pt.data:
+            raise HTTPException(status_code=404, detail="Patient not found")
+        pid = pt.data["id"]
+
+        errors = []
+        valid_items = []
+
+        for item in request.items:
+            med_id = item.get("medicine_id")
+            qty = max(1, int(item.get("qty", 1)))
+
+            med = sb.table("medicines").select(
+                "id,name,stock,prescription_required"
+            ).eq("id", med_id).single().execute()
+
+            if not med.data:
+                errors.append(f"Medicine {med_id} not found")
+                continue
+            m = med.data
+
+            if m["prescription_required"]:
+                # Quick check — look for any prescription record mentioning this medicine
+                recs = sb.table("records").select("extracted_text").eq("patient_id", pid).eq("record_type", "prescription").execute()
+                has_rx = any(
+                    m["name"].lower() in (r.get("extracted_text") or "").lower()
+                    for r in (recs.data or [])
+                )
+                if not has_rx:
+                    errors.append(f"{m['name']} requires a prescription. Please upload one first.")
+                    continue
+
+            if m["stock"] < qty:
+                errors.append(f"Not enough stock for {m['name']} (available: {m['stock']})")
+                continue
+
+            valid_items.append({"med": m, "qty": qty})
+
+        if not valid_items:
+            return {"success": False, "error": "; ".join(errors) if errors else "No valid items"}
+
+        # Create order with status 'pending' (valid per CHECK constraint)
+        order_res = sb.table("orders").insert({
+            "patient_id": pid,
+            "status": "pending",
+            "total_items": sum(i["qty"] for i in valid_items),
+            "channel": "web",
+        }).execute()
+        order_id = order_res.data[0]["id"]
+
+        # Insert order_items
+        for i in valid_items:
+            sb.table("order_items").insert({
+                "order_id": order_id,
+                "medicine_id": i["med"]["id"],
+                "qty": i["qty"],
+                "dosage_text": "As directed",
+                "frequency_per_day": 1,
+                "days_supply": 30,
+            }).execute()
+
+        # Finalise order and decrement stock
+        for i in valid_items:
+            try:
+                sb.rpc("decrement_medicine_stock", {
+                    "p_medicine_id": i["med"]["id"],
+                    "p_qty": i["qty"],
+                }).execute()
+            except Exception:
+                pass  # Stock decrement failure should not block the order
+
+        from datetime import datetime, timezone
+        sb.table("orders").update({
+            "status": "fulfilled",
+            "finalized_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", order_id).execute()
+
+        return {
+            "success": True,
+            "order_id": order_id,
+            "items_ordered": [{"name": i["med"]["name"], "qty": i["qty"]} for i in valid_items],
+            "warnings": errors,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/check-rx")
+async def check_rx(patient_id: str, medicine_name: str):
+    """
+    Pre-flight check: does this patient have an uploaded prescription record
+    that mentions the given medicine name in its extracted_text?
+    Returns {has_prescription: bool}.
+    """
+    try:
+        sb = _get_sb()
+        pt = sb.table("patients").select("id").eq("user_id", patient_id).single().execute()
+        if not pt.data:
+            return {"has_prescription": False}
+        pid = pt.data["id"]
+        recs = (
+            sb.table("records")
+            .select("extracted_text")
+            .eq("patient_id", pid)
+            .eq("record_type", "prescription")
+            .execute()
+        )
+        has_rx = any(
+            medicine_name.lower() in (r.get("extracted_text") or "").lower()
+            for r in (recs.data or [])
+        )
+        return {"has_prescription": has_rx}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/verify-rx-upload")
+async def verify_rx_upload(
+    patient_id: str = Form(...),
+    medicine_name: str = Form(...),
+    file: UploadFile = File(...),
+):
+    """
+    Upload a prescription image/PDF and verify it mentions the given medicine.
+    Steps:
+      1. Read uploaded file bytes
+      2. Send to Gemini Vision to extract all text from the document
+      3. Check whether medicine_name appears in the extracted text
+      4. If valid, save as a prescription record in the records table
+      5. Return {valid, message, extracted_text}
+    """
+    import base64
+
+    try:
+        contents = await file.read()
+        if not contents:
+            return {"valid": False, "message": "Uploaded file is empty.", "extracted_text": ""}
+
+        # Determine MIME type
+        mime = file.content_type or "image/jpeg"
+        # Convert to base64 for Gemini inline data
+        b64 = base64.b64encode(contents).decode("utf-8")
+
+        # Ask Gemini to extract all text from the prescription document
+        extraction_prompt = (
+            "You are a medical OCR assistant. Extract ALL text from this prescription image "
+            "exactly as written. Include medicine names, dosages, instructions, patient name, "
+            "doctor name, and date. Output only the extracted text, nothing else."
+        )
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content([
+            extraction_prompt,
+            {"mime_type": mime, "data": b64},
+        ])
+        extracted_text = response.text.strip() if response.text else ""
+
+        # Check if the medicine name appears in the extracted text
+        med_lower = medicine_name.lower()
+        if med_lower not in extracted_text.lower():
+            return {
+                "valid": False,
+                "message": (
+                    f"❌ Prescription does not mention **{medicine_name}**. "
+                    "Please upload a valid prescription that includes this medicine."
+                ),
+                "extracted_text": extracted_text,
+            }
+
+        # Valid prescription — save to records table for future reference
+        try:
+            sb = _get_sb()
+            pt = sb.table("patients").select("id").eq("user_id", patient_id).single().execute()
+            if pt.data:
+                pid = pt.data["id"]
+                sb.table("records").insert({
+                    "patient_id": pid,
+                    "uploaded_by": patient_id,   # auth uid
+                    "record_type": "prescription",
+                    "title": f"Prescription – {medicine_name}",
+                    "extracted_text": extracted_text,
+                    "file_name": file.filename or "prescription.jpg",
+                    "file_size": len(contents),
+                    "notes": f"Auto-uploaded during medicine purchase for {medicine_name}",
+                }).execute()
+        except Exception as save_err:
+            print(f"⚠️ Could not save prescription record: {save_err}")
+            # Don't fail the verification if saving fails
+
+        return {
+            "valid": True,
+            "message": f"✅ Valid prescription found for **{medicine_name}**. You can proceed with the order.",
+            "extracted_text": extracted_text,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Dose-consumption models ──────────────────────────────────────────────────
+
+class ConsumeDoseRequest(BaseModel):
+    patient_id: str      # auth.uid()
+    order_item_id: str   # order_items.id
+
+
+@app.post("/consume-dose")
+async def consume_dose(request: ConsumeDoseRequest):
+    """
+    "Taken" button for as-needed medicines.
+    Decrements order_items.qty by 1 for the given item.
+    Only allowed if qty > 0 and the item belongs to the requesting patient.
+    """
+    try:
+        sb = _get_sb()
+
+        # Verify ownership: trace order_item → order → patients.user_id
+        item_res = (
+            sb.table("order_items")
+            .select("id, qty, orders(patient_id, patients(user_id))")
+            .eq("id", request.order_item_id)
+            .maybe_single()
+            .execute()
+        )
+        if not item_res.data:
+            raise HTTPException(status_code=404, detail="Order item not found")
+
+        item = item_res.data
+        owner_uid = (
+            item.get("orders", {}).get("patients", {}).get("user_id")
+        )
+        if owner_uid != request.patient_id:
+            raise HTTPException(status_code=403, detail="Not your medicine")
+
+        current_qty = item.get("qty", 0)
+        if current_qty <= 0:
+            return {"success": False, "error": "No remaining units to consume"}
+
+        new_qty = current_qty - 1
+        sb.table("order_items").update({"qty": new_qty}).eq("id", request.order_item_id).execute()
+
+        return {"success": True, "remaining": new_qty}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/due-doses")
+async def due_doses(patient_id: str):
+    """
+    Return order_items for this patient's fulfilled orders that have
+    frequency_per_day set (scheduled medicines), so the frontend can
+    show next-dose info. Also returns IST current hour for reference.
+    """
+    try:
+        from datetime import datetime, timezone, timedelta
+        IST = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(IST)
+
+        sb = _get_sb()
+        pt = sb.table("patients").select("id").eq("user_id", patient_id).single().execute()
+        if not pt.data:
+            return {"success": True, "items": [], "now_ist_hour": now_ist.hour}
+        pid = pt.data["id"]
+
+        orders_res = (
+            sb.table("orders")
+            .select("id")
+            .eq("patient_id", pid)
+            .in_("status", ["fulfilled", "approved"])
+            .execute()
+        )
+        order_ids = [o["id"] for o in (orders_res.data or [])]
+        if not order_ids:
+            return {"success": True, "items": [], "now_ist_hour": now_ist.hour}
+
+        items_res = (
+            sb.table("order_items")
+            .select("id, qty, frequency_per_day, dosage_text, medicines(name)")
+            .in_("order_id", order_ids)
+            .not_.is_("frequency_per_day", "null")
+            .gt("qty", 0)
+            .execute()
+        )
+        return {"success": True, "items": items_res.data or [], "now_ist_hour": now_ist.hour}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Background auto-decrement scheduler ─────────────────────────────────────
+# Dose windows in IST hours. When the backend clock ticks past one of these,
+# we decrement qty by 1 for all scheduled (frequency_per_day >= window index)
+# active order_items across all patients.
+_DOSE_WINDOWS_IST = [8, 14, 20]   # 08:00, 14:00, 20:00 IST
+_last_decremented_window: set = set()   # tracks "YYYY-MM-DD:HH" already processed
+
+def _run_scheduled_decrement():
+    """Background thread: checks every minute if a dose window has arrived."""
+    import threading
+    from datetime import datetime, timezone, timedelta
+
+    IST = timezone(timedelta(hours=5, minutes=30))
+
+    def _decrement_loop():
+        global _last_decremented_window
+        while True:
+            try:
+                now = datetime.now(IST)
+                window_key = f"{now.date()}:{now.hour}"
+
+                if now.hour in _DOSE_WINDOWS_IST and window_key not in _last_decremented_window:
+                    _last_decremented_window.add(window_key)
+                    _do_auto_decrement(now.hour)
+
+                # Prune old keys (keep only today's)
+                today = str(now.date())
+                _last_decremented_window = {k for k in _last_decremented_window if k.startswith(today)}
+
+            except Exception as exc:
+                print(f"⚠️ Auto-decrement scheduler error: {exc}")
+            time.sleep(60)   # check every minute
+
+    t = threading.Thread(target=_decrement_loop, daemon=True, name="dose-scheduler")
+    t.start()
+    print("⏰ Dose scheduler started (windows: 08:00, 14:00, 20:00 IST)")
+
+
+def _do_auto_decrement(ist_hour: int):
+    """
+    At dose window ist_hour, decrement qty by 1 for every active order_item
+    whose medicine is scheduled (frequency_per_day >= number of windows per day
+    that map to or before this hour).
+    """
+    try:
+        from datetime import datetime, timezone, timedelta
+        sb = _get_sb()
+
+        # Window index: 08→1, 14→2, 20→3
+        window_index = _DOSE_WINDOWS_IST.index(ist_hour) + 1
+
+        # Fetch all fulfilled/approved order items with frequency_per_day set and qty > 0
+        orders_res = sb.table("orders").select("id").in_("status", ["fulfilled", "approved"]).execute()
+        if not orders_res.data:
+            return
+
+        order_ids = [o["id"] for o in orders_res.data]
+        items_res = (
+            sb.table("order_items")
+            .select("id, qty, frequency_per_day, medicines(name)")
+            .in_("order_id", order_ids)
+            .gte("frequency_per_day", window_index)   # e.g. at 14:00, only items with freq>=2
+            .gt("qty", 0)
+            .execute()
+        )
+        items = items_res.data or []
+        decremented = 0
+        for item in items:
+            new_qty = max(0, item["qty"] - 1)
+            sb.table("order_items").update({"qty": new_qty}).eq("id", item["id"]).execute()
+            decremented += 1
+
+        print(f"⏰ Auto-decrement @ IST {ist_hour:02d}:00 — {decremented} items decremented")
+    except Exception as exc:
+        print(f"❌ Auto-decrement failed: {exc}")
+
+
+# ── App lifespan (start scheduler on boot) ───────────────────────────────────
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app_instance):
+    _run_scheduled_decrement()
+    yield
+
+
+# Patch the lifespan onto the existing app
+app.router.lifespan_context = lifespan
+
+
+@app.post("/pharmacy/chat")
+
+
+async def pharmacy_chat(request: PharmacyChatRequest):
+    """
+    Expert Pharmacy Agent — powered by the multi-agent orchestrator.
+    Delegates to PharmacyAgent (search, prescription check, order + stock decrement),
+    RefillAgent, NotificationAgent, and HealthAgent based on user intent.
+    Returns the same ChatResponse shape as before — no frontend changes needed.
+    """
+    try:
+        from agents.orchestrator_agent import OrchestratorAgent as _OrchestratorAgent
+        if not hasattr(pharmacy_chat, "_orchestrator"):
+            pharmacy_chat._orchestrator = _OrchestratorAgent()
+
+        print(f"💊 Expert Pharmacy Query (multi-agent): {request.message}")
+
+        # The frontend sends patient_id = auth.uid() — pass as user_id so every
+        # sub-agent resolves patients.id (FK in orders/refills) correctly.
+        result = await pharmacy_chat._orchestrator.run(
+            message=request.message,
+            user_id=request.patient_id,
+            language=request.language,
+        )
+
+        ai_text = result.get("response", "")
+
+        # Voice synthesis — identical to the original implementation
         audio_data_b64 = None
-        if request.use_voice:
+        if request.use_voice and ai_text:
             try:
                 audio_bytes = await voice_service.synthesize_empathic(ai_text, request.language)
                 if audio_bytes:
                     import base64
-                    audio_data_b64 = base64.b64encode(audio_bytes).decode('utf-8')
-            except Exception as e:
-                print(f"⚠️ Pharmacy Voice synthesis failed: {e}")
+                    audio_data_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+            except Exception as ve:
+                print(f"⚠️ Pharmacy Voice synthesis failed: {ve}")
 
         return ChatResponse(success=True, response=ai_text, audio_data=audio_data_b64)
+
     except Exception as e:
         print(f"❌ Pharmacy Chat Error: {e}")
         import traceback
         traceback.print_exc()
-        
-        # Check if it's a rate limit error to give a better message
         error_msg = str(e)
-        
-        # Language-aware error fallbacks
         fallbacks = {
             "hi": "मुझे अभी आपके फार्मेसी रिकॉर्ड्स में परेशानी हो रही है। कृपया थोड़ी देर बाद फिर से प्रयास करें।",
             "mr": "मला आता तुमच्या फार्मसी रेकॉर्डमध्ये अडचण येत आहे. कृपया थोड्या वेळाने पुन्हा प्रयत्न करा.",
-            "en": "I'm having trouble with my pharmacy records. Please try again."
+            "en": "I'm having trouble with my pharmacy records. Please try again.",
         }
         quota_fallbacks = {
             "hi": "मुझे अभी बहुत सारे अनुरोध मिल रहे हैं। कृपया एक पल प्रतीक्षा करें और पुन: प्रयास करें।",
             "mr": "मला सध्या खूप विनंत्या येत आहेत. कृपया क्षणभर थांबा आणि पुन्हा प्रयत्न करा.",
-            "en": "I'm currently receiving too many requests. Please wait a moment and try again."
+            "en": "I'm currently receiving too many requests. Please wait a moment and try again.",
         }
-        
-        selected_fb = fallbacks.get(request.language, fallbacks["en"])
-        selected_quota = quota_fallbacks.get(request.language, quota_fallbacks["en"])
-
+        lang = getattr(request, "language", "en")
         if "429" in error_msg or "quota" in error_msg.lower() or "RESOURCE_EXHAUSTED" in error_msg:
-             return ChatResponse(success=False, response=selected_quota, error=str(e))
-             
-        return ChatResponse(success=False, response=selected_fb, error=str(e))
+            return ChatResponse(success=False, response=quota_fallbacks.get(lang, quota_fallbacks["en"]), error=error_msg)
+        return ChatResponse(success=False, response=fallbacks.get(lang, fallbacks["en"]), error=error_msg)
 
-# ==========================================
-# ROUTES
-# ==========================================
 
 @app.post("/health_trends")
 async def get_health_trends(request: HealthAnalysisRequest):
@@ -767,6 +1019,64 @@ async def get_refill_alerts(patient_id: str):
     """Fetch proactive refill alerts for a patient."""
     alerts = await pharmacy_service.get_refill_candidates(patient_id)
     return {"success": True, "alerts": alerts}
+
+# ==========================================
+# MULTI-AGENT ORCHESTRATOR ENDPOINT
+# ==========================================
+from agents.orchestrator_agent import OrchestratorAgent
+
+_orchestrator = OrchestratorAgent()
+
+class AgentChatRequest(BaseModel):
+    message: str
+    user_id: str          # auth.uid() of the logged-in patient (enforces data isolation)
+    language: str = "en"
+    use_voice: bool = False
+
+@app.post("/agent/chat")
+async def agent_chat(request: AgentChatRequest):
+    """
+    Multi-agent orchestrated chat endpoint.
+    The OrchestratorAgent decides which specialist sub-agents to call,
+    enforcing that all data access is scoped to request.user_id.
+    """
+    try:
+        print(f"🧠 Orchestrator query from user {request.user_id}: {request.message}")
+        result = await _orchestrator.run(
+            message=request.message,
+            user_id=request.user_id,
+            language=request.language,
+        )
+
+        # Optional voice synthesis on the final response
+        audio_data_b64 = None
+        if request.use_voice and result.get("response"):
+            try:
+                audio_bytes = await voice_service.synthesize_empathic(result["response"], request.language)
+                if audio_bytes:
+                    import base64
+                    audio_data_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+            except Exception as ve:
+                print(f"⚠️ Agent voice synthesis failed: {ve}")
+
+        return {
+            "success": result["success"],
+            "response": result["response"],
+            "agents_used": result.get("agents_used", []),
+            "steps": result.get("steps", []),
+            "audio_data": audio_data_b64,
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"❌ Agent Chat Error: {e}")
+        return {
+            "success": False,
+            "response": "I'm having trouble coordinating my agents right now. Please try again.",
+            "agents_used": [],
+            "steps": [],
+            "error": str(e),
+        }
 
 # ==========================================
 # Startup/Shutdown Events & Background Jobs

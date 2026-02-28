@@ -19,6 +19,8 @@ const Analysis = React.lazy(() =>
 const PharmacyChat = React.lazy(() =>
   import("@/pages/patient/PharmacyChat").then((module) => ({ default: module.PharmacyChat }))
 );
+const MyMedicines = React.lazy(() => import("@/pages/patient/MyMedicines"));
+
 
 const Chat = React.lazy(() =>
   import("@/pages/patient/Chat").then((module) => ({ default: module.Chat }))
@@ -190,6 +192,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <PharmacyChat />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/patient/my-medicines"
+              element={
+                <ProtectedRoute>
+                  <MyMedicines />
                 </ProtectedRoute>
               }
             />

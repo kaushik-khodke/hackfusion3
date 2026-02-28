@@ -265,7 +265,12 @@ export function Navbar() {
       {
         to: "/patient/pharmacy-chat",
         label: "Expert Pharmacy",
-        icon: <ShieldCheck className="h-4 w-4" />, // Using ShieldCheck or Pill if available
+        icon: <ShieldCheck className="h-4 w-4" />,
+      },
+      {
+        to: "/patient/my-medicines",
+        label: "💊 My Medicines",
+        icon: <FileText className="h-4 w-4" />,
       },
     ];
   }, [user, role, pendingConsents, t]);
@@ -273,11 +278,10 @@ export function Navbar() {
   const cmdItems = useMemo(() => {
     const base = [
       { label: "Dashboard", to: "/dashboard", hint: "Home stats" },
-
       // patient
       { label: "Consents", to: "/patient/consent", hint: "Approve requests" },
       { label: "Records", to: "/patient/records", hint: "My records" },
-
+      { label: "My Medicines", to: "/patient/my-medicines", hint: "Cabinet & shop" },
       // doctor
       { label: "Doctor Scan", to: "/doctor/scan", hint: "Request access" },
     ];
@@ -544,6 +548,13 @@ export function Navbar() {
                               Records
                             </Link>
                           </DropdownMenuItem>
+                          <DropdownMenuItem asChild className="rounded-lg cursor-pointer py-2.5">
+                            <Link to="/patient/my-medicines">
+                              <FileText className="mr-2 h-4 w-4" />
+                              💊 My Medicines
+                            </Link>
+                          </DropdownMenuItem>
+
                         </>
                       ) : null}
 
