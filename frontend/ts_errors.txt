@@ -1,0 +1,3 @@
+﻿src/components/features/ConsentInbox.tsx(58,30): error TS2322: Type '"default" | "warning"' is not assignable to type '"default" | "secondary" | "outline" | "destructive" | null | undefined'.
+  Type '"warning"' is not assignable to type '"default" | "secondary" | "outline" | "destructive" | null | undefined'.
+src/components/features/ConsentInbox.tsx(106,26): error TS2322: Type '"success"' is not assignable to type '"default" | "secondary" | "outline" | "destructive" | null | undefined'.

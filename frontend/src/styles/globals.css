@@ -1,0 +1,264 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* MEDICAL TECH THEME (Deep Blues, Bright Teals, Clean Whites) */
+
+    /* Backgrounds */
+    --background: 210 40% 98%;
+    /* Clinical White */
+    --foreground: 222 47% 11%;
+    /* Deep Slate Text */
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    /* Brand Colors */
+    --primary: 221 83% 53%;
+    /* Medical Blue (Trust) */
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 180 77% 40%;
+    /* Cyan/Teal (Technology/Health) */
+    --secondary-foreground: 210 40% 98%;
+
+    --accent: 210 40% 96%;
+    /* Soft Slate Accent */
+    --accent-foreground: 222 47% 11%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215 25% 40%;
+    /* Higher contrast for legibility */
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214.3 31.8% 90%;
+    --input: 214.3 31.8% 90%;
+    --ring: 221 83% 53%;
+
+    --radius: 0.75rem;
+    /* Precise rounding */
+  }
+
+  .dark {
+    /* TECH DARK MODE (Data-Driven, Cyber-Medical) */
+    --background: 222 47% 10%;
+    /* Darkest Blueprint Blue */
+    --foreground: 210 40% 98%;
+
+    --card: 222 47% 14%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 10%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 217 91% 60%;
+    /* Glowing Blue */
+    --primary-foreground: 222 47% 11%;
+
+    --secondary: 180 80% 45%;
+    /* Glowing Teal */
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 217 33% 18%;
+    --muted-foreground: 215 20.2% 70%;
+
+    --accent: 217 33% 18%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217 33% 20%;
+    --input: 217 33% 20%;
+    --ring: 217 91% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply text-foreground antialiased selection:bg-primary/20;
+    font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1;
+    font-family: 'Inter', sans-serif;
+
+    /* HIGHLY VISIBLE Dynamic Healthcare Gradient */
+    background: linear-gradient(135deg,
+        #e0f2fe 0%,
+        #dbeafe 25%,
+        #cffafe 50%,
+        #dbeafe 75%,
+        #e0f2fe 100%);
+    background-size: 400% 400%;
+    animation: aurora 15s ease infinite;
+  }
+
+  .dark body {
+    background: linear-gradient(135deg,
+        #1e293b 0%,
+        #1e3a8a 25%,
+        #134e4a 50%,
+        #1e3a8a 75%,
+        #1e293b 100%);
+    background-size: 400% 400%;
+    animation: aurora 15s ease infinite;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    letter-spacing: -0.03em;
+  }
+}
+
+@layer components {
+
+  /* Fixed navbar: stays on top when scrolling, blurs content underneath */
+  .glass-panel {
+    @apply backdrop-blur-xl bg-white/95 dark:bg-slate-900/95 border-b border-border/50;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.04);
+  }
+
+  .dark .glass-panel {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  /* Soft blurred background for dashboard pages */
+  .dashboard-backdrop {
+    @apply fixed inset-0 -z-10;
+    background: linear-gradient(135deg, rgba(224, 242, 254, 0.6) 0%, rgba(219, 234, 254, 0.5) 50%, rgba(207, 250, 254, 0.5) 100%);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  .dark .dashboard-backdrop {
+    background: linear-gradient(135deg, rgba(30, 41, 59, 0.85) 0%, rgba(30, 58, 138, 0.6) 50%, rgba(19, 78, 74, 0.6) 100%);
+  }
+
+  /* Enhanced Glassmorphism Cards */
+  .glass-panel-3d {
+    @apply backdrop-blur-xl bg-white/70 dark:bg-slate-900/70 border border-white/60 dark:border-slate-700/60;
+    box-shadow:
+      0 8px 32px rgba(31, 38, 135, 0.15),
+      inset 0 1px 0 rgba(255, 255, 255, 0.4);
+    transform-style: preserve-3d;
+  }
+
+  .glass-card {
+    @apply backdrop-blur-md bg-white/80 dark:bg-slate-900/80 border border-white/50 dark:border-slate-700/50;
+    box-shadow:
+      0 4px 24px rgba(31, 38, 135, 0.10),
+      inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  }
+
+  /* Grid Background Pattern */
+  .bg-grid-pattern {
+    background-size: 50px 50px;
+    background-image: linear-gradient(to right, rgba(0, 0, 0, 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(0, 0, 0, 0.05) 1px, transparent 1px);
+  }
+
+  .dark .bg-grid-pattern {
+    background-image: linear-gradient(to right, rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  }
+
+  .mask-radial-faded {
+    mask-image: radial-gradient(circle at center, black 40%, transparent 100%);
+    -webkit-mask-image: radial-gradient(circle at center, black 40%, transparent 100%);
+  }
+
+  /* Text Gradients */
+  .text-gradient-tech {
+    @apply bg-gradient-to-r from-blue-600 via-cyan-500 to-teal-400 bg-clip-text text-transparent;
+  }
+
+  .dark .text-gradient-tech {
+    @apply bg-gradient-to-r from-blue-400 via-cyan-300 to-teal-200 bg-clip-text text-transparent;
+  }
+
+  /* Button Gradients */
+  .btn-gradient {
+    @apply bg-gradient-to-r from-primary to-blue-600 text-white shadow-lg shadow-blue-500/25 border-0;
+  }
+
+  .gradient-primary {
+    @apply bg-gradient-to-r from-blue-600 to-teal-500 text-white shadow-lg shadow-primary/20 border-0 hover:opacity-95 hover:shadow-primary/30 transition-all;
+  }
+
+  /* Animations */
+  .animate-float-slow {
+    animation: float 8s ease-in-out infinite;
+  }
+
+  .animate-float-medium {
+    animation: float 6s ease-in-out infinite reverse;
+  }
+
+  @keyframes float {
+
+    0%,
+    100% {
+      transform: translateY(0) rotate(0deg);
+    }
+
+    50% {
+      transform: translateY(-15px) rotate(1deg);
+    }
+  }
+
+  @keyframes aurora {
+    0% {
+      background-position: 0% 50%;
+    }
+
+    50% {
+      background-position: 100% 50%;
+    }
+
+    100% {
+      background-position: 0% 50%;
+    }
+  }
+
+  /* 3D Tilt Utilities */
+  .perspective-1000 {
+    perspective: 1000px;
+  }
+
+  .preserve-3d {
+    transform-style: preserve-3d;
+  }
+
+  .backface-hidden {
+    backface-visibility: hidden;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Neon Glows */
+  .shadow-glow-primary {
+    box-shadow: 0 0 20px -5px theme('colors.primary.DEFAULT');
+  }
+
+  .shadow-glow-secondary {
+    box-shadow: 0 0 20px -5px theme('colors.secondary.DEFAULT');
+  }
+}
