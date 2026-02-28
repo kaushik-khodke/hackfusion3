@@ -169,12 +169,12 @@ export function Signup() {
 
       // Insert into auth.profiles because there is no Supabase trigger handling this
       // Only runs if session exists (user is auto-logged in)
-      const { error: profileError } = await supabase.from("profiles").insert({
+      const { error: profileError } = await supabase.from("profiles").upsert({
         id: authData.user.id,
         role: role,
         full_name: data.fullName,
         phone: data.phone,
-      });
+      }, { onConflict: 'id' });
 
       if (profileError) {
         throw new Error("Failed to create profile: " + profileError.message);
