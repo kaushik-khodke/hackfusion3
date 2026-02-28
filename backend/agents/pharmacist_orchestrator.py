@@ -232,7 +232,10 @@ class PharmacistOrchestratorAgent:
             f"[Live Simple Summary Cache]\n"
             f"Total Inventory Items: {len(inv)}\n"
             f"Total Pending Orders: {pending}\n\n"
-            f"Language: {language}\n"
+            f"IMPORTANT INSTRUCTION: The user has selected the language code '{language}'. "
+            f"You MUST read the user's query and provide your ENTIRE final response strictly in the requested language "
+            f"('{language}'). If '{language}' is 'hi', speak in Hindi. If '{language}' is 'mr', speak in Marathi. If '{language}' is 'en', speak in English.\n"
+            f"Do not mix languages. Do not reply in English if 'hi' or 'mr' is selected.\n\n"
             f"{history_block}\n"
             f"Pharmacist: {message}"
         )

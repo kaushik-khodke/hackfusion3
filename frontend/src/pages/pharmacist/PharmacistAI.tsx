@@ -50,6 +50,7 @@ export function PharmacistAI({ isOpen, onToggle }: { isOpen: boolean, onToggle: 
     const [messages, setMessages] = useState<Message[]>([])
     const [inputValue, setInputValue] = useState('')
     const [isLoading, setIsLoading] = useState(false)
+    const [language, setLanguage] = useState<'en' | 'hi' | 'mr'>('en')
 
     // Voice states
     const [isListening, setIsListening] = useState(false)
@@ -83,7 +84,9 @@ export function PharmacistAI({ isOpen, onToggle }: { isOpen: boolean, onToggle: 
         const recognition = new SpeechRecognition()
         recognition.continuous = true
         recognition.interimResults = true
-        recognition.lang = 'en-US'
+
+        const langMap = { 'en': 'en-US', 'hi': 'hi-IN', 'mr': 'mr-IN' }
+        recognition.lang = langMap[language] || 'en-US'
 
         recognition.onresult = (event: any) => {
             let currentText = ''
@@ -197,6 +200,7 @@ export function PharmacistAI({ isOpen, onToggle }: { isOpen: boolean, onToggle: 
                 body: JSON.stringify({
                     message: textToSend,
                     use_voice: true, // Always request high-quality audio
+                    language: language,
                 }),
             })
             const result = await response.json()
@@ -330,6 +334,20 @@ export function PharmacistAI({ isOpen, onToggle }: { isOpen: boolean, onToggle: 
             </CardContent>
 
             <div className="p-4 border-t border-slate-100 bg-white/80 backdrop-blur-md shrink-0">
+                <div className="flex gap-2 mb-3">
+                    <div className="flex-1 text-xs text-slate-500 font-medium flex items-center gap-2">
+                        <span>Language:</span>
+                        <select
+                            value={language}
+                            onChange={(e) => setLanguage(e.target.value as any)}
+                            className="bg-slate-50 border border-slate-200 rounded px-2 py-1 outline-none focus:border-fuchsia-300 transition-colors"
+                        >
+                            <option value="en">English</option>
+                            <option value="hi">हिंदी (Hindi)</option>
+                            <option value="mr">मराठी (Marathi)</option>
+                        </select>
+                    </div>
+                </div>
                 <div className="flex gap-2">
                     <Button
                         variant="ghost"

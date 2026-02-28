@@ -82,6 +82,7 @@ class ManualOrderRequest(BaseModel):
 class PharmacistAIRequest(BaseModel):
     message: str
     use_voice: bool = False
+    language: str = "en"
 
 # ==========================================
 # ROUTES
@@ -1111,7 +1112,7 @@ async def pharmacist_ai_query(req: PharmacistAIRequest):
         # Dispatch exactly like the patient chat path
         result = await pharmacist_ai_query._orchestrator.run(
             message=req.message,
-            language="en", # Forced to english for pharmacist UI in our original implementation
+            language=req.language,
         )
 
         ai_text = result.get("response", "I could not compute an answer.")
@@ -1121,7 +1122,7 @@ async def pharmacist_ai_query(req: PharmacistAIRequest):
         if req.use_voice and ai_text:
             # Clean markdown for TTS
             clean_tts = ai_text.replace('*', '').replace('#', '').strip()
-            audio_bytes = await voice_service.synthesize_empathic(clean_tts, "en") # Always english standard for pharmacist
+            audio_bytes = await voice_service.synthesize_empathic(clean_tts, req.language)
             if audio_bytes:
                 import base64
                 audio_data = base64.b64encode(audio_bytes).decode('utf-8')
