@@ -9,7 +9,7 @@ import { useTranslation } from "react-i18next";
 import { motion } from "framer-motion";
 import {
     AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
-    BarChart, Bar, Legend, ReferenceLine
+    BarChart, Bar, Legend, ReferenceLine, ComposedChart, Line
 } from 'recharts';
 import { PharmacistAI } from "./PharmacistAI";
 
@@ -175,18 +175,21 @@ export default function PharmacistDashboard() {
         }
     };
 
-    // Calculate Trend Data (last 14 days of order frequency)
+    // Calculate Trend Data (last 14 days of order & revenue)
     const trendData = useMemo(() => {
         if (!orderHistory.length) return [];
         const grouped = orderHistory.reduce((acc: any, oh: any) => {
             const date = new Date(oh.purchase_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-            acc[date] = (acc[date] || 0) + 1;
+            if (!acc[date]) acc[date] = { orders: 0, revenue: 0 };
+            acc[date].orders += 1;
+            acc[date].revenue += Number(oh.total_price_eur) || 0;
             return acc;
         }, {});
 
         return Object.keys(grouped).slice(0, 14).map(date => ({
             date,
-            orders: grouped[date]
+            orders: grouped[date].orders,
+            revenue: Math.round(grouped[date].revenue * 10) / 10
         })).reverse();
     }, [orderHistory]);
 
@@ -253,25 +256,9 @@ export default function PharmacistDashboard() {
             </div>
 
             {/* Metrics Row */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <motion.div variants={itemVariants}>
-                    <Card className="bg-blue-50/50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-800">
-                        <CardContent className="p-6">
-                            <div className="flex items-center gap-3">
-                                <div className="p-3 bg-blue-100 dark:bg-blue-800 rounded-xl">
-                                    <Clock className="w-5 h-5 text-blue-600 dark:text-blue-300" />
-                                </div>
-                                <div>
-                                    <p className="text-sm font-medium text-muted-foreground">Pending Orders</p>
-                                    <p className="text-2xl font-bold">{pendingOrders.length}</p>
-                                </div>
-                            </div>
-                        </CardContent>
-                    </Card>
-                </motion.div>
-
-                <motion.div variants={itemVariants}>
-                    <Card className="bg-red-50/50 dark:bg-red-900/10 border-red-200 dark:border-red-800">
+                    <Card className="bg-red-50/50 dark:bg-red-900/10 border-red-200 dark:border-red-800 h-full">
                         <CardContent className="p-6">
                             <div className="flex items-center gap-3">
                                 <div className="p-3 bg-red-100 dark:bg-red-800 rounded-xl">
@@ -303,288 +290,290 @@ export default function PharmacistDashboard() {
                 </motion.div>
             </div>
 
-            {/* Predictive Analytics & Charts Row */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                {/* Order Trend Area Chart */}
-                <motion.div variants={itemVariants}>
+            {/* Charts & Recent Orders Row */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
+                {/* Order Trend Chart (Takes 2 cols) */}
+                <motion.div variants={itemVariants} className="lg:col-span-2">
                     <Card className="h-full border-indigo-100 dark:border-indigo-900 shadow-lg shadow-indigo-100/20">
                         <CardHeader className="pb-2">
-                            <CardTitle className="text-lg flex items-center gap-2">
-                                <Activity className="w-5 h-5 text-indigo-500" />
-                                14-Day Order Velocity
+                            <CardTitle className="text-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                    <Activity className="w-5 h-5 text-indigo-500" />
+                                    14-Day Revenue & Orders
+                                </div>
+                                <div className="text-sm font-normal text-muted-foreground">
+                                    Total Orders: {orders.length} | Pending: {pendingOrders.length}
+                                </div>
                             </CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <div className="h-[250px] w-full mt-4">
+                            <div className="h-[300px] w-full mt-4">
                                 <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={trendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                    <ComposedChart data={trendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                                         <defs>
-                                            <linearGradient id="colorOrders" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor="#6366f1" stopOpacity={0.4} />
-                                                <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                                            <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                                                <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
                                             </linearGradient>
                                         </defs>
                                         <CartesianGrid strokeDasharray="3 3" vertical={false} strokeOpacity={0.2} />
                                         <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#888' }} />
-                                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#888' }} />
-                                        <RechartsTooltip
-                                            contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}
-                                            cursor={{ stroke: '#6366f1', strokeWidth: 1, strokeDasharray: '4 4' }}
-                                        />
-                                        <Area type="monotone" dataKey="orders" stroke="#6366f1" strokeWidth={3} fillOpacity={1} fill="url(#colorOrders)" />
-                                    </AreaChart>
+                                        <YAxis yAxisId="left" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#888' }} tickFormatter={(val) => `€${val}`} />
+                                        <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#888' }} />
+                                        <RechartsTooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }} />
+                                        <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+                                        <Area yAxisId="left" type="monotone" dataKey="revenue" name="Revenue (€)" stroke="#10b981" fill="url(#colorRevenue)" strokeWidth={2} />
+                                        <Line yAxisId="right" type="monotone" dataKey="orders" name="Orders" stroke="#6366f1" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} />
+                                    </ComposedChart>
                                 </ResponsiveContainer>
                             </div>
                         </CardContent>
                     </Card>
                 </motion.div>
 
-                {/* Critical Stock Bar Chart */}
-                <motion.div variants={itemVariants}>
-                    <Card className="h-full border-red-100 dark:border-red-900 shadow-lg shadow-red-100/20">
-                        <CardHeader className="pb-2">
-                            <CardTitle className="text-lg flex items-center gap-2">
-                                <BarChart3 className="w-5 h-5 text-red-500" />
-                                Critical Inventory Levels
+                {/* Recent Orders (Takes 1 col) */}
+                <motion.div variants={itemVariants} className="lg:col-span-1">
+                    <Card className="h-[400px] border-blue-100 dark:border-blue-900 shadow-lg shadow-blue-100/20 flex flex-col">
+                        <CardHeader className="pb-2 bg-blue-50/50 dark:bg-blue-900/20 border-b border-blue-100 dark:border-blue-800">
+                            <CardTitle className="text-lg flex flex-row items-center justify-between">
+                                <div className="flex items-center gap-2"><Clock className="w-5 h-5 text-blue-500" /> Recent Orders</div>
                             </CardTitle>
                         </CardHeader>
-                        <CardContent>
-                            <div className="h-[250px] w-full mt-4">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <BarChart data={stockChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} strokeOpacity={0.2} />
-                                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#888' }} />
-                                        <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#888' }} />
-                                        <RechartsTooltip
-                                            contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 15px rgba(0,0,0,0.1)' }}
-                                            cursor={{ fill: '#fef2f2' }}
-                                        />
-                                        <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
-                                        <Bar dataKey="stock" name="Current Stock" fill="#ef4444" radius={[4, 4, 0, 0]} maxBarSize={40} />
-                                        <Bar dataKey="threshold" name="Min Threshold" fill="#f87171" fillOpacity={0.4} radius={[4, 4, 0, 0]} maxBarSize={40} />
-                                    </BarChart>
-                                </ResponsiveContainer>
+                        <CardContent className="flex-1 overflow-y-auto p-0">
+                            <div className="divide-y divide-border">
+                                {orders.slice(0, 10).map(o => (
+                                    <div key={o.id} className="p-4 hover:bg-muted/30 transition-colors flex flex-col gap-2">
+                                        <div className="flex justify-between items-start">
+                                            <h4 className="font-semibold text-sm">{o.patients?.full_name}</h4>
+                                            <Badge variant={o.status === 'pending' ? 'default' : 'outline'} className={o.status === 'pending' ? 'bg-amber-500 hover:bg-amber-600 border-none text-white' : 'text-xs capitalize'}>
+                                                {o.status}
+                                            </Badge>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground line-clamp-2">
+                                            {o.order_items?.map((item: any) => `${item.qty}x ${item.medicines?.name}`).join(", ")}
+                                        </p>
+                                        {o.status === "pending" && (
+                                            <div className="flex items-center gap-2 mt-2">
+                                                <Button size="sm" className="h-7 text-xs bg-green-600 hover:bg-green-700 w-full" onClick={() => updateOrderStatus(o.id, "approved")}>Approve</Button>
+                                                <Button size="sm" variant="outline" className="h-7 text-xs border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 w-full" onClick={() => updateOrderStatus(o.id, "rejected")}>Reject</Button>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                                {orders.length === 0 && <p className="text-center text-muted-foreground p-8 text-sm">No orders found.</p>}
                             </div>
                         </CardContent>
                     </Card>
                 </motion.div>
             </div>
 
+            {/* Critical Stock & Refill Alerts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                {/* Orders Table */}
+                {/* Refill Alerts */}
                 <motion.div variants={itemVariants}>
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Recent Orders</CardTitle>
+                    <Card className="h-full border-amber-100 dark:border-amber-900 shadow-xl shadow-amber-100/20">
+                        <CardHeader className="bg-amber-50/50 dark:bg-amber-900/20 border-b border-amber-100 dark:border-amber-800">
+                            <CardTitle className="flex items-center gap-2 text-amber-800 dark:text-amber-300">
+                                <Package className="w-5 h-5" /> Refill Action Required
+                            </CardTitle>
                         </CardHeader>
-                        <CardContent>
-                            <div className="space-y-4">
-                                {orders.slice(0, 10).map(o => (
-                                    <div key={o.id} className="p-4 rounded-xl border flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
+                        <CardContent className="p-0">
+                            <div className="divide-y divide-border max-h-[300px] overflow-y-auto">
+                                {refillAlerts.length > 0 ? refillAlerts.map(alert => (
+                                    <div key={alert.id} className="p-4 flex justify-between items-center hover:bg-amber-50/30 transition-colors">
                                         <div>
-                                            <h4 className="font-semibold">{o.patients?.full_name}</h4>
-                                            <p className="text-sm text-muted-foreground">
-                                                {o.order_items?.map((item: any) => `${item.qty}x ${item.medicines?.name}`).join(", ")}
-                                            </p>
+                                            <h4 className="font-medium text-sm text-foreground">{alert.patients?.full_name}</h4>
+                                            <p className="text-xs text-muted-foreground mt-1">Medication: {alert.medicines?.name}</p>
                                         </div>
-                                        <div className="flex items-center gap-2">
-                                            <Badge variant="outline" className="mr-2">
-                                                {o.status}
+                                        <div className="text-right">
+                                            <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-200 font-medium">
+                                                Runs out: {new Date(alert.predicted_runout_date).toLocaleDateString()}
                                             </Badge>
-                                            {o.status === "pending" && (
-                                                <>
-                                                    <Button size="sm" variant="default" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => updateOrderStatus(o.id, "approved")}>Approve</Button>
-                                                    <Button size="sm" variant="outline" className="border-red-500 text-red-500" onClick={() => updateOrderStatus(o.id, "rejected")}>Reject</Button>
-                                                </>
-                                            )}
                                         </div>
                                     </div>
-                                ))}
-                                {orders.length === 0 && <p className="text-center text-muted-foreground">No orders found.</p>}
+                                )) : <p className="text-center text-muted-foreground p-8 text-sm">No pending refill alerts.</p>}
                             </div>
                         </CardContent>
                     </Card>
                 </motion.div>
 
-                {/* Inventory Monitor */}
+                {/* Critical Stock Tracker */}
                 <motion.div variants={itemVariants}>
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Inventory Monitor</CardTitle>
+                    <Card className="h-full border-red-100 dark:border-red-900 shadow-xl shadow-red-100/20">
+                        <CardHeader className="bg-red-50/50 dark:bg-red-900/20 border-b border-red-100 dark:border-red-800">
+                            <CardTitle className="flex items-center gap-2 text-red-800 dark:text-red-300">
+                                <AlertTriangle className="w-5 h-5" /> Critical Stock Tracker
+                            </CardTitle>
                         </CardHeader>
-                        <CardContent>
-                            <div className="space-y-4">
-                                {inventory.slice(0, 10).map(m => {
-                                    const isLow = m.stock <= (m.reorder_threshold || 10);
-                                    return (
-                                        <div key={m.id} className={`p-4 rounded-xl border flex justify-between items-center ${isLow ? 'bg-red-50 border-red-200 dark:bg-red-950/20 dark:border-red-900/50' : ''}`}>
-                                            <div>
-                                                <h4 className="font-semibold">{m.name} <span className="text-sm font-normal text-muted-foreground ml-2">{m.strength}</span></h4>
-                                                <p className="text-sm text-muted-foreground">Threshold: {m.reorder_threshold || 10}</p>
-                                            </div>
-                                            <div>
-                                                <Badge variant="default" className={isLow ? "bg-red-500 text-white" : "bg-green-500 text-white"}>
-                                                    {m.stock} in stock
-                                                </Badge>
-                                            </div>
-                                        </div>
-                                    )
-                                })}
-                            </div>
-                        </CardContent>
-                    </Card>
-                </motion.div>
-
-                {/* System Notifications */}
-                <motion.div variants={itemVariants} className="col-span-1 lg:col-span-2">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>System Notifications Log</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="space-y-2">
-                                {notifications.map(n => (
-                                    <div key={n.id} className="p-3 text-sm bg-muted/40 rounded flex justify-between items-center">
+                        <CardContent className="p-0">
+                            <div className="divide-y divide-border max-h-[300px] overflow-y-auto">
+                                {lowStockMeds.length > 0 ? lowStockMeds.map(m => (
+                                    <div key={m.id} className="p-4 flex justify-between items-center hover:bg-red-50/30 transition-colors">
                                         <div>
-                                            <Badge variant="outline" className="mr-2 border-red-300 text-red-600">Low Stock Alert</Badge>
-                                            <span>{n.payload?.medicine_name} is critically low (Stock: {n.payload?.current_stock})</span>
+                                            <h4 className="font-semibold text-sm">{m.name} <span className="text-xs font-normal text-muted-foreground ml-1">{m.strength}</span></h4>
+                                            <p className="text-xs text-muted-foreground mt-1">Threshold: {m.reorder_threshold || 10}</p>
                                         </div>
-                                        <span className="text-xs text-muted-foreground">{new Date(n.created_at).toLocaleString()}</span>
+                                        <div className="text-right flex flex-col items-end gap-1">
+                                            <Badge variant="destructive" className="animate-pulse shadow-sm">
+                                                {m.stock} in stock
+                                            </Badge>
+                                        </div>
                                     </div>
-                                ))}
-                                {notifications.length === 0 && <p className="text-sm text-muted-foreground">No recent alerts.</p>}
+                                )) : <p className="text-center text-muted-foreground p-8 text-sm">Inventory levels are healthy.</p>}
                             </div>
                         </CardContent>
                     </Card>
                 </motion.div>
+            </div>
 
-                {/* Raw Order History Table */}
-                <motion.div variants={itemVariants} className="col-span-1 lg:col-span-2">
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Global Order History (Raw Records)</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-sm text-left">
-                                    <thead className="text-xs text-muted-foreground bg-muted/40 uppercase">
+            {/* System Notifications */}
+            <motion.div variants={itemVariants}>
+                <Card>
+                    <CardHeader>
+                        <CardTitle>System Notifications Log</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="space-y-2">
+                            {notifications.map(n => (
+                                <div key={n.id} className="p-3 text-sm bg-muted/40 rounded flex justify-between items-center">
+                                    <div>
+                                        <Badge variant="outline" className="mr-2 border-red-300 text-red-600">Low Stock Alert</Badge>
+                                        <span>{n.payload?.medicine_name} is critically low (Stock: {n.payload?.current_stock})</span>
+                                    </div>
+                                    <span className="text-xs text-muted-foreground">{new Date(n.created_at).toLocaleString()}</span>
+                                </div>
+                            ))}
+                            {notifications.length === 0 && <p className="text-sm text-muted-foreground">No recent alerts.</p>}
+                        </div>
+                    </CardContent>
+                </Card>
+            </motion.div>
+
+            {/* Raw Order History Table */}
+            <motion.div variants={itemVariants}>
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Global Order History (Raw Records)</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm text-left">
+                                <thead className="text-xs text-muted-foreground bg-muted/40 uppercase">
+                                    <tr>
+                                        <th className="px-4 py-3">Date</th>
+                                        <th className="px-4 py-3">Patient Ext ID</th>
+                                        <th className="px-4 py-3">Product</th>
+                                        <th className="px-4 py-3">Qty</th>
+                                        <th className="px-4 py-3">Price (€)</th>
+                                        <th className="px-4 py-3">Demographics</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredOrderHistory.map((oh: any) => (
+                                        <tr key={oh.id} className="border-b border-border/40 hover:bg-muted/30 transition-colors">
+                                            <td className="px-4 py-3">{new Date(oh.purchase_date).toLocaleDateString()}</td>
+                                            <td className="px-4 py-3 font-mono text-xs">{oh.patient_external_id}</td>
+                                            <td className="px-4 py-3 font-medium">{oh.product_name}</td>
+                                            <td className="px-4 py-3">{oh.quantity}</td>
+                                            <td className="px-4 py-3">€{oh.total_price_eur}</td>
+                                            <td className="px-4 py-3">Age: {oh.patient_age}, {oh.patient_gender}</td>
+                                        </tr>
+                                    ))}
+                                    {filteredOrderHistory.length === 0 && (
                                         <tr>
-                                            <th className="px-4 py-3">Date</th>
-                                            <th className="px-4 py-3">Patient Ext ID</th>
-                                            <th className="px-4 py-3">Product</th>
-                                            <th className="px-4 py-3">Qty</th>
-                                            <th className="px-4 py-3">Price (€)</th>
-                                            <th className="px-4 py-3">Demographics</th>
+                                            <td colSpan={6} className="px-4 py-12 text-center text-muted-foreground bg-muted/5">No historical records found matching "{orderSearchQuery}".</td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </CardContent>
+                </Card>
+            </motion.div>
+
+            {/* Full Medicines Database */}
+            <motion.div variants={itemVariants}>
+                <Card>
+                    <CardHeader className="flex flex-col sm:flex-row justify-between items-start sm:items-center space-y-2 sm:space-y-0 pb-4 border-b bg-gradient-to-r from-muted/30 to-transparent">
+                        <CardTitle>Comprehensive Medicines Record</CardTitle>
+                        <div className="relative w-full sm:w-64">
+                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                            <input
+                                type="text"
+                                placeholder="Search by name or strength..."
+                                value={medSearchQuery}
+                                onChange={(e) => setMedSearchQuery(e.target.value)}
+                                className="pl-9 p-2 w-full text-sm border rounded-md bg-background"
+                            />
+                        </div>
+                    </CardHeader>
+                    <CardContent className="pt-4">
+                        <div className="w-full border rounded-md overflow-hidden">
+                            <div className="max-h-[450px] overflow-y-auto">
+                                <table className="w-full text-sm text-left">
+                                    <thead className="text-xs text-muted-foreground bg-muted/60 uppercase sticky top-0 z-10 shadow-sm">
+                                        <tr>
+                                            <th className="px-4 py-3">Medicine Name</th>
+                                            <th className="px-4 py-3">Strength</th>
+                                            <th className="px-4 py-3">Unit/Size</th>
+                                            <th className="px-4 py-3 text-center">In Stock</th>
+                                            <th className="px-4 py-3 text-center">Req. Prescription</th>
+                                            <th className="px-4 py-3 text-center">Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {filteredOrderHistory.map((oh: any) => (
-                                            <tr key={oh.id} className="border-b border-border/40 hover:bg-muted/30 transition-colors">
-                                                <td className="px-4 py-3">{new Date(oh.purchase_date).toLocaleDateString()}</td>
-                                                <td className="px-4 py-3 font-mono text-xs">{oh.patient_external_id}</td>
-                                                <td className="px-4 py-3 font-medium">{oh.product_name}</td>
-                                                <td className="px-4 py-3">{oh.quantity}</td>
-                                                <td className="px-4 py-3">€{oh.total_price_eur}</td>
-                                                <td className="px-4 py-3">Age: {oh.patient_age}, {oh.patient_gender}</td>
+                                        {filteredMedicines.map((med: any) => (
+                                            <tr key={med.id} className={`border-b border-border/40 hover:bg-muted/30 transition-colors ${med.stock <= (med.reorder_threshold ?? 10) ? 'bg-red-500/5 hover:bg-red-500/10' : ''}`}>
+                                                <td className="px-4 py-3 font-medium text-primary">{med.name}</td>
+                                                <td className="px-4 py-3 text-muted-foreground">{med.strength || '-'}</td>
+                                                <td className="px-4 py-3 text-muted-foreground">{med.package_size || med.unit_type || '-'}</td>
+                                                <td className="px-4 py-3 text-center">
+                                                    {editingMedId === med.id ? (
+                                                        <input
+                                                            type="number"
+                                                            value={editMedStock}
+                                                            onChange={(e) => setEditMedStock(Number(e.target.value))}
+                                                            className="w-20 p-1 text-sm border rounded bg-background text-center"
+                                                        />
+                                                    ) : (
+                                                        <Badge variant={med.stock <= (med.reorder_threshold ?? 10) ? 'destructive' : 'outline'}>
+                                                            {med.stock}
+                                                        </Badge>
+                                                    )}
+                                                </td>
+                                                <td className="px-4 py-3 text-center">
+                                                    {med.prescription_required ? <CheckCircle className="w-4 h-4 text-amber-500 mx-auto" /> : '-'}
+                                                </td>
+                                                <td className="px-4 py-3 text-center">
+                                                    {editingMedId === med.id ? (
+                                                        <div className="flex items-center justify-center gap-2">
+                                                            <button onClick={() => saveMedicineStock(med.id)} className="p-1 rounded bg-green-500/10 text-green-500 hover:bg-green-500/20 transition-colors">
+                                                                <Check className="w-4 h-4" />
+                                                            </button>
+                                                            <button onClick={() => setEditingMedId(null)} className="p-1 rounded bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors">
+                                                                <X className="w-4 h-4" />
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <button onClick={() => handleEditStockClick(med)} className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-primary transition-colors">
+                                                            <Edit2 className="w-4 h-4 mx-auto" />
+                                                        </button>
+                                                    )}
+                                                </td>
                                             </tr>
                                         ))}
-                                        {filteredOrderHistory.length === 0 && (
+                                        {filteredMedicines.length === 0 && (
                                             <tr>
-                                                <td colSpan={6} className="px-4 py-12 text-center text-muted-foreground bg-muted/5">No historical records found matching "{orderSearchQuery}".</td>
+                                                <td colSpan={6} className="px-4 py-12 text-center text-muted-foreground bg-muted/5">No medicines found matching "{medSearchQuery}".</td>
                                             </tr>
                                         )}
                                     </tbody>
                                 </table>
                             </div>
-                        </CardContent>
-                    </Card>
-                </motion.div>
-
-                {/* Full Medicines Database */}
-                <motion.div variants={itemVariants} className="col-span-1 lg:col-span-2">
-                    <Card>
-                        <CardHeader className="flex flex-col sm:flex-row justify-between items-start sm:items-center space-y-2 sm:space-y-0 pb-4 border-b bg-gradient-to-r from-muted/30 to-transparent">
-                            <CardTitle>Comprehensive Medicines Record</CardTitle>
-                            <div className="relative w-full sm:w-64">
-                                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                                <input
-                                    type="text"
-                                    placeholder="Search by name or strength..."
-                                    value={medSearchQuery}
-                                    onChange={(e) => setMedSearchQuery(e.target.value)}
-                                    className="pl-9 p-2 w-full text-sm border rounded-md bg-background"
-                                />
-                            </div>
-                        </CardHeader>
-                        <CardContent className="pt-4">
-                            <div className="w-full border rounded-md overflow-hidden">
-                                <div className="max-h-[450px] overflow-y-auto">
-                                    <table className="w-full text-sm text-left">
-                                        <thead className="text-xs text-muted-foreground bg-muted/60 uppercase sticky top-0 z-10 shadow-sm">
-                                            <tr>
-                                                <th className="px-4 py-3">Medicine Name</th>
-                                                <th className="px-4 py-3">Strength</th>
-                                                <th className="px-4 py-3">Unit/Size</th>
-                                                <th className="px-4 py-3 text-center">In Stock</th>
-                                                <th className="px-4 py-3 text-center">Req. Prescription</th>
-                                                <th className="px-4 py-3 text-center">Actions</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {filteredMedicines.map((med: any) => (
-                                                <tr key={med.id} className={`border-b border-border/40 hover:bg-muted/30 transition-colors ${med.stock <= (med.reorder_threshold ?? 10) ? 'bg-red-500/5 hover:bg-red-500/10' : ''}`}>
-                                                    <td className="px-4 py-3 font-medium text-primary">{med.name}</td>
-                                                    <td className="px-4 py-3 text-muted-foreground">{med.strength || '-'}</td>
-                                                    <td className="px-4 py-3 text-muted-foreground">{med.package_size || med.unit_type || '-'}</td>
-                                                    <td className="px-4 py-3 text-center">
-                                                        {editingMedId === med.id ? (
-                                                            <input
-                                                                type="number"
-                                                                value={editMedStock}
-                                                                onChange={(e) => setEditMedStock(Number(e.target.value))}
-                                                                className="w-20 p-1 text-sm border rounded bg-background text-center"
-                                                            />
-                                                        ) : (
-                                                            <Badge variant={med.stock <= (med.reorder_threshold ?? 10) ? 'destructive' : 'outline'}>
-                                                                {med.stock}
-                                                            </Badge>
-                                                        )}
-                                                    </td>
-                                                    <td className="px-4 py-3 text-center">
-                                                        {med.prescription_required ? <CheckCircle className="w-4 h-4 text-amber-500 mx-auto" /> : '-'}
-                                                    </td>
-                                                    <td className="px-4 py-3 text-center">
-                                                        {editingMedId === med.id ? (
-                                                            <div className="flex items-center justify-center gap-2">
-                                                                <button onClick={() => saveMedicineStock(med.id)} className="p-1 rounded bg-green-500/10 text-green-500 hover:bg-green-500/20 transition-colors">
-                                                                    <Check className="w-4 h-4" />
-                                                                </button>
-                                                                <button onClick={() => setEditingMedId(null)} className="p-1 rounded bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors">
-                                                                    <X className="w-4 h-4" />
-                                                                </button>
-                                                            </div>
-                                                        ) : (
-                                                            <button onClick={() => handleEditStockClick(med)} className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-primary transition-colors">
-                                                                <Edit2 className="w-4 h-4 mx-auto" />
-                                                            </button>
-                                                        )}
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                            {filteredMedicines.length === 0 && (
-                                                <tr>
-                                                    <td colSpan={6} className="px-4 py-12 text-center text-muted-foreground bg-muted/5">No medicines found matching "{medSearchQuery}".</td>
-                                                </tr>
-                                            )}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </CardContent>
-                    </Card>
-                </motion.div>
-
-            </div >
+                        </div>
+                    </CardContent>
+                </Card>
+            </motion.div>
 
             {/* Floating Action Button for AI */}
             <motion.div
