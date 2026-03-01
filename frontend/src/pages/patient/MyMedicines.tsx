@@ -23,11 +23,8 @@ import {
     Zap,
     CalendarClock,
     FileText,
-    Mic,
     PhoneCall,
-    PhoneOff,
 } from 'lucide-react'
-import { useConversation } from '@elevenlabs/react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Badge } from '@/components/ui/Badge'
@@ -211,38 +208,6 @@ export default function MyMedicines() {
     const [phoneNumber, setPhoneNumber] = useState('')
     const [callingPhone, setCallingPhone] = useState(false)
 
-    // ── ElevenLabs Conversational AI ────────────────────
-    const conversation = useConversation({
-        onConnect: () => console.log('Connected to AI'),
-        onDisconnect: () => {
-            console.log('Disconnected from AI')
-            fetchOrders() // refresh orders after the call in case AI placed one
-        },
-        onMessage: (message: any) => console.log('AI Message:', message),
-        onError: (error: any) => console.error('AI Error:', error),
-    })
-
-    const toggleAICall = useCallback(async () => {
-        if (conversation.status === 'connected') {
-            await conversation.endSession()
-        } else {
-            try {
-                // Request microphone permission
-                await navigator.mediaDevices.getUserMedia({ audio: true })
-                await conversation.startSession({
-                    agentId: (import.meta.env.VITE_ELEVENLABS_AGENT_ID as string) || 'dummy_agent_id',
-                    connectionType: 'webrtc',
-                    dynamicVariables: {
-                        patient_id: user?.id || 'anonymous'
-                    }
-                })
-            } catch (err) {
-                console.error('Failed to start AI call:', err)
-                alert('Could not start call. Please check microphone access and valid Agent ID.')
-            }
-        }
-    }, [conversation])
-
     const triggerOutboundCall = async () => {
         if (!phoneNumber) {
             alert('Please enter your phone number first')
@@ -255,7 +220,8 @@ export default function MyMedicines() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     phone_number: phoneNumber,
-                    agent_id: import.meta.env.VITE_ELEVENLABS_AGENT_ID || 'dummy_agent_id'
+                    agent_id: (import.meta.env.VITE_ELEVENLABS_AGENT_ID as string) || 'dummy_agent_id',
+                    patient_id: user?.id || 'anonymous'
                 })
             })
             const data = await res.json()
@@ -306,6 +272,37 @@ export default function MyMedicines() {
     useEffect(() => {
         if (tab === 'shop') fetchCatalogue(search)
     }, [tab, search, fetchCatalogue])
+
+    // ── Check prescriptions for items in cart ───────────
+    useEffect(() => {
+        if (!user?.id || cart.length === 0) return
+
+        const checkRxs = async () => {
+            const newStatus = { ...rxStatus }
+            let changed = false
+
+            for (const item of cart) {
+                if (item.medicine.prescription_required && rxStatus[item.medicine.id] === undefined) {
+                    // Start checking
+                    if (!rxChecked.current.has(item.medicine.id)) {
+                        rxChecked.current.add(item.medicine.id)
+                        try {
+                            const res = await fetch(`${API_BASE_URL}/verify-prescription?patient_id=${user.id}&medicine_name=${encodeURIComponent(item.medicine.name)}`)
+                            const data = await res.json()
+                            newStatus[item.medicine.id] = data.valid
+                            changed = true
+                        } catch (e) {
+                            console.error(e)
+                            newStatus[item.medicine.id] = false
+                            changed = true
+                        }
+                    }
+                }
+            }
+            if (changed) setRxStatus(newStatus)
+        }
+        checkRxs()
+    }, [cart, user?.id, rxStatus])
 
     // ── Derived: ALL medicines from fulfilled orders (including finished) ─
     const activeMeds = orders
@@ -845,24 +842,6 @@ export default function MyMedicines() {
                                             className="pl-10 rounded-xl h-12 bg-white border-slate-200"
                                         />
                                     </div>
-                                    <Button
-                                        onClick={toggleAICall}
-                                        className={`h-12 rounded-xl px-5 whitespace-nowrap shadow-sm transition-all ${conversation.status === 'connected'
-                                            ? 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 hover:text-red-700'
-                                            : conversation.status === 'connecting'
-                                                ? 'bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100'
-                                                : 'bg-indigo-50 text-indigo-600 border border-indigo-200 hover:bg-indigo-100 hover:text-indigo-700'
-                                            }`}
-                                        variant="outline"
-                                    >
-                                        {conversation.status === 'connected' ? (
-                                            <><PhoneOff className="w-4 h-4 mr-2 animate-pulse" /> End AI Call</>
-                                        ) : conversation.status === 'connecting' ? (
-                                            <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Connecting...</>
-                                        ) : (
-                                            <><PhoneCall className="w-4 h-4 mr-2" /> Order via Voice (AI)</>
-                                        )}
-                                    </Button>
                                 </div>
 
                                 <div className="flex flex-col sm:flex-row gap-3 mb-5 items-center bg-white/50 p-4 rounded-2xl border border-indigo-100 shadow-sm">

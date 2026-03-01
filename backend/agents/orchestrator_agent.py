@@ -16,6 +16,7 @@ from agents.pharmacy_agent import PharmacyAgent
 from agents.refill_agent import RefillAgent
 from agents.notification_agent import NotificationAgent
 from agents.health_agent import HealthAgent
+from agents.prescription_agent import PrescriptionAgent
 
 
 # ── Tool declarations for Gemini ────────────────────────────────────────────
@@ -81,6 +82,21 @@ TOOLS = [
                     "required": ["action"],
                 },
             },
+            {
+                "name": "call_prescription_agent",
+                "description": (
+                    "Verify if a patient has a valid prescription for a specific medicine. "
+                    "Use this to check requirements, extract dosage instructions, or ask for missing prescription info."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "medicine_name": {"type": "string", "description": "The name of the medicine to verify"},
+                        "action": {"type": "string", "enum": ["verify"], "description": "default is verify"}
+                    },
+                    "required": ["medicine_name"],
+                },
+            },
         ]
     }
 ]
@@ -89,7 +105,8 @@ SYSTEM_PROMPT = """
 You are the **MyHealthChain Master AI Agent** — a senior healthcare assistant that coordinates specialist sub-agents.
 
 You have access to four agent tools:
-• call_pharmacy_agent  — search/order medicines, verify prescriptions
+• call_pharmacy_agent  — search/order medicines
+• call_prescription_agent — verify prescriptions and extract dosage instructions
 • call_refill_agent    — detect which medicines are running low and create alerts
 • call_notification_agent — log confirmations and alerts
 • call_health_agent    — search medical records, run health risk analysis
@@ -116,6 +133,7 @@ class OrchestratorAgent:
         self.refill       = RefillAgent()
         self.notification = NotificationAgent()
         self.health       = HealthAgent()
+        self.prescription = PrescriptionAgent()
         # Per-user conversation history: user_id → list of {"role": "user"|"assistant", "content": str}
         self._sessions: Dict[str, List[Dict]] = {}
 
@@ -171,6 +189,11 @@ class OrchestratorAgent:
             ctx = {**base_ctx, "action": args.get("action", "search"),
                    "query": args.get("query", "")}
             return await self.health.run(args.get("query", ""), ctx)
+
+        if tool_name == "call_prescription_agent":
+            ctx = {**base_ctx, "medicine_name": args.get("medicine_name"),
+                   "action": args.get("action", "verify")}
+            return await self.prescription.run(args.get("medicine_name"), ctx)
 
         return AgentResult(success=False, message=f"Unknown tool: {tool_name}", agent_name="orchestrator")
 

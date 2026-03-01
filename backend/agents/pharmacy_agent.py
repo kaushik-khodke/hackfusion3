@@ -12,6 +12,7 @@ import google.generativeai as genai
 from langfuse.decorators import observe
 
 from agents.base_agent import BaseAgent, AgentResult
+from agents.prescription_agent import PrescriptionAgent
 
 
 class PharmacyAgent(BaseAgent):
@@ -22,6 +23,7 @@ class PharmacyAgent(BaseAgent):
         url = os.getenv("VITE_SUPABASE_URL")
         key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
         self.db: Client = create_client(url, key)
+        self.prescription_agent = PrescriptionAgent()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -89,7 +91,7 @@ class PharmacyAgent(BaseAgent):
         {combined_text}
         """
         try:
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            model = genai.GenerativeModel("gemini-2.5-flash")
             response = model.generate_content(prompt)
             raw = response.text.strip()
             if raw.startswith("```json"):
@@ -124,7 +126,7 @@ class PharmacyAgent(BaseAgent):
         JSON OUTPUT MUST STRICTLY BE A VALID ARRAY e.g. [{{"medicine_name": "Panadol", "qty": 10, "frequency_per_day": 3, "dosage_text": "after meals"}}]
         """
         try:
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            model = genai.GenerativeModel("gemini-2.5-flash")
             response = model.generate_content(prompt)
             raw = response.text.strip()
             if raw.startswith("```json"):
@@ -257,39 +259,21 @@ class PharmacyAgent(BaseAgent):
 
             # Prescription check
             if med["prescription_required"]:
-                result = self.verify_prescription(med["name"], patient_id)
-                if not result.get("verified"):
-                    return AgentResult(
-                        success=False,
-                        data={"needs_prescription": True, "medicine": med["name"]},
-                        agent_name=self.name,
-                        message=(
-                            f"**{med['name']} requires a valid prescription.** "
-                            "I couldn't find a matching prescription in your records. "
-                            "Please upload your prescription (via the Records page) and try again, "
-                            "or ask your doctor to issue one."
-                        ),
-                    )
+                rx_result = await self.prescription_agent.run(med["name"], {
+                    "user_id": user_id,
+                    "medicine_name": med["name"],
+                    "action": "verify"
+                })
                 
-                # Use prescription values if user didn't explicitly provide them
-                qty = result.get("qty", qty)
-                if not freq and result.get("frequency_per_day"):
-                    freq = result.get("frequency_per_day")
-                if not dosage and result.get("dosage_text"):
-                    dosage = result.get("dosage_text")
-                    
-                # Missing Information Prompt
-                if not freq or not dosage:
-                    missing = []
-                    if not freq: missing.append("how many times a day to take it")
-                    if not dosage: missing.append("specific dosage instructions (e.g., after food, 500mg)")
-                    
-                    return AgentResult(
-                        success=False,
-                        agent_name=self.name,
-                        message=f"I found your prescription for **{med['name']}**, but it's missing {', and '.join(missing)}. "
-                                f"Could you please tell me this information so I can complete your safety profile and order?"
-                    )
+                if not rx_result.success:
+                    # Propagate the prescription agent's requirement (upload or info)
+                    return rx_result
+                
+                # Use verified/extracted values
+                data = rx_result.data
+                qty = data.get("qty", qty) # Take from prescription if available
+                if not freq: freq = data.get("frequency_per_day")
+                if not dosage: dosage = data.get("amount") or data.get("dosage_text")
 
             # Create pending order draft
             draft = self.create_order_draft(patient_id, [{

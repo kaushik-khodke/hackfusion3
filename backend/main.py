@@ -111,6 +111,7 @@ class VoiceOrderRequest(BaseModel):
 class OutboundCallRequest(BaseModel):
     phone_number: str
     agent_id: str
+    patient_id: str
     agent_phone_number_id: Optional[str] = None
 
 # ==========================================
@@ -229,15 +230,23 @@ async def manual_order(request: ManualOrderRequest):
             m = med.data
 
             if m["prescription_required"]:
-                # Quick check — look for any prescription record mentioning this medicine
-                recs = sb.table("records").select("extracted_text").eq("patient_id", pid).eq("record_type", "prescription").execute()
-                has_rx = any(
-                    m["name"].lower() in (r.get("extracted_text") or "").lower()
-                    for r in (recs.data or [])
-                )
-                if not has_rx:
-                    errors.append(f"{m['name']} requires a prescription. Please upload one first.")
+                from agents.prescription_agent import PrescriptionAgent
+                rx_agent = PrescriptionAgent()
+                rx_result = await rx_agent.run(m["name"], {
+                    "user_id": request.patient_id,
+                    "medicine_name": m["name"],
+                    "action": "verify"
+                })
+                
+                if not rx_result.success:
+                    errors.append(rx_result.message)
                     continue
+                
+                # If verified, use the extracted info if not provided
+                if not freq and rx_result.data.get("frequency_per_day"):
+                    freq = rx_result.data.get("frequency_per_day")
+                if dosage == "As directed" and rx_result.data.get("amount"):
+                    dosage = rx_result.data.get("amount")
 
             if m["stock"] < qty:
                 errors.append(f"Not enough stock for {m['name']} (available: {m['stock']})")
@@ -344,42 +353,109 @@ async def trigger_outbound_call(request: OutboundCallRequest):
     Triggers an outbound phone call via ElevenLabs.
     Requires a phone number and agent ID.
     Relies on ElevenLabs Twilio integration.
+    Triggers an outbound call using ElevenLabs API.
     """
     import httpx
     
-    api_key = os.getenv("ELEVENLABS_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="ELEVENLABS_API_KEY not configured")
-        
-    # Default to a configured env var if not provided in request
-    agent_phone_number_id = request.agent_phone_number_id or os.getenv("ELEVENLABS_PHONE_ID")
-    if not agent_phone_number_id:
-        return {"success": False, "error": "Agent Phone Number ID is missing (ELEVENLABS_PHONE_ID not set)"}
-
-    url = "https://api.elevenlabs.io/v1/convai/twilio/outbound-call"
-    headers = {
-        "xi-api-key": api_key,
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "agent_id": request.agent_id,
-        "to_number": request.phone_number,
-        "agent_phone_number_id": agent_phone_number_id
-    }
-
     try:
+        api_key = os.getenv("ELEVENLABS_API_KEY")
+        phone_id = request.agent_phone_number_id or os.getenv("ELEVENLABS_PHONE_ID")
+        
+        if not api_key:
+            return {"success": False, "error": "ELEVENLABS_API_KEY not configured"}
+        if not phone_id:
+            return {"success": False, "error": "No Agent Phone Number ID provided"}
+
+        url = "https://api.elevenlabs.io/v1/convai/outbound_call"
+        headers = {
+            "xi-api-key": api_key,
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "from_phone_number_id": phone_id,
+            "to_phone_number": request.phone_number,
+            "agent_id": request.agent_id,
+            "dynamic_variables": {
+                "patient_id": request.patient_id
+            }
+        }
+
         async with httpx.AsyncClient() as client:
             response = await client.post(url, headers=headers, json=payload, timeout=30.0)
             
-            if response.status_code == 200:
-                return {"success": True, "message": "Call initiated successfully!"}
-            else:
-                return {
-                    "success": False, 
-                    "error": f"ElevenLabs API Error: {response.status_code} - {response.text}"
-                }
+        if response.status_code == 200:
+            return {"success": True, "call_id": response.json().get("call_id")}
+        else:
+            return {"success": False, "error": f"ElevenLabs API Error: {response.status_code} - {response.text}"}
+            
     except Exception as e:
-        return {"success": False, "error": f"Internal Error: {str(e)}"}
+        return {"success": False, "error": str(e)}
+
+@app.get("/available-medicines")
+async def get_available_medicines():
+    """
+    Helper for AI Agent to find what's in stock.
+    """
+    try:
+        sb = _get_sb()
+        res = sb.table("medicines").select("id, name, stock, price, category").gt("stock", 0).execute()
+        return {"success": True, "medicines": res.data or []}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+async def _create_stripe_checkout(order_id: str, success_url: str, cancel_url: str):
+    """
+    Internal helper to create a Stripe checkout session.
+    """
+    sb = _get_sb()
+    # Fetch order details
+    order_res = (
+        sb.table("orders")
+        .select("id, status, order_items(qty, medicines(name, price_rec))")
+        .eq("id", order_id)
+        .single()
+        .execute()
+    )
+    if not order_res.data:
+        raise HTTPException(status_code=404, detail="Order not found")
+    order = order_res.data
+
+    line_items = []
+    for item in order["order_items"]:
+        med = item["medicines"]
+        # Convert price to cents. Default to 10.00 if N/A
+        price_amount = min(max(1, int(float(med.get("price_rec") or 10.00) * 100)), 999999)
+        line_items.append({
+            "price_data": {
+                "currency": "usd",
+                "product_data": {
+                    "name": med["name"],
+                },
+                "unit_amount": price_amount,
+            },
+            "quantity": item["qty"],
+        })
+
+    if not line_items:
+        raise HTTPException(status_code=400, detail="No valid items in order to checkout")
+
+    if not stripe.api_key:
+        # Fallback mock
+        mock_url = f"{success_url}?session_id=mock_session_123&order_id={order_id}"
+        return {"success": True, "url": mock_url}
+
+    session = stripe.checkout.Session.create(
+        payment_method_types=["card"],
+        line_items=line_items,
+        mode="payment",
+        # Encode BOTH session_id and order_id in success URL so frontend can pass both back
+        success_url=success_url + "?session_id={CHECKOUT_SESSION_ID}&order_id=" + order_id,
+        cancel_url=cancel_url,
+        client_reference_id=order_id
+    )
+
+    return {"success": True, "url": session.url}
 
 @app.post("/create-checkout-session")
 async def create_checkout_session(request: CheckoutSessionRequest):
@@ -387,59 +463,71 @@ async def create_checkout_session(request: CheckoutSessionRequest):
     Generate a Stripe Checkout Session for an existing pending order.
     """
     try:
-        sb = _get_sb()
-        # Fetch order details
-        order_res = (
-            sb.table("orders")
-            .select("id, status, order_items(qty, medicines(name, price_rec))")
-            .eq("id", request.order_id)
-            .single()
-            .execute()
+        return await _create_stripe_checkout(
+            order_id=request.order_id,
+            success_url=request.success_url,
+            cancel_url=request.cancel_url
         )
-        if not order_res.data:
-            raise HTTPException(status_code=404, detail="Order not found")
-        order = order_res.data
-        print(f"DEBUG: Checkout sees order {order['id']} with status {order['status']}")
-        # Note: no status check — fulfilled orders can also demo the Stripe checkout UI
-
-        line_items = []
-        for item in order["order_items"]:
-            med = item["medicines"]
-            # Convert price to cents. Default to 10.00 if N/A
-            price_amount = min(max(1, int(float(med.get("price_rec") or 10.00) * 100)), 999999)
-            line_items.append({
-                "price_data": {
-                    "currency": "usd",
-                    "product_data": {
-                        "name": med["name"],
-                    },
-                    "unit_amount": price_amount,
-                },
-                "quantity": item["qty"],
-            })
-
-        if not line_items:
-            raise HTTPException(status_code=400, detail="No valid items in order to checkout")
-
-        if not stripe.api_key:
-            # Fallback mock
-            mock_url = f"{request.success_url}?session_id=mock_session_123&order_id={request.order_id}"
-            return {"success": True, "url": mock_url}
-
-        session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
-            line_items=line_items,
-            mode="payment",
-            # Encode BOTH session_id and order_id in success URL so frontend can pass both back
-            success_url=request.success_url + "?session_id={CHECKOUT_SESSION_ID}&order_id=" + request.order_id,
-            cancel_url=request.cancel_url,
-            client_reference_id=request.order_id
-        )
-
-        return {"success": True, "url": session.url}
     except Exception as e:
         print(f"Checkout Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/voice-pay-link")
+async def voice_pay_link(patient_id: str):
+    """
+    AI Tool endpoint: Find the latest 'pending' order for this patient 
+    and return a Stripe payment link.
+    """
+    try:
+        sb = _get_sb()
+        # Find latest pending order for this patient
+        order_res = (
+            sb.table("orders")
+            .select("id")
+            .eq("patient_id", patient_id)
+            .eq("status", "pending")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        
+        if not order_res.data:
+            return {"success": False, "error": "No pending orders found for this patient."}
+            
+        order_id = order_res.data[0]["id"]
+        
+        # We need a success/cancel URL. For voice, we can point to the dashboard.
+        # Ideally, this should be configurable, but we'll use a sensible default.
+        base_url = "http://localhost:3000/patient/my-medicines" 
+        
+        result = await _create_stripe_checkout(
+            order_id=order_id,
+            success_url=base_url,
+            cancel_url=base_url
+        )
+        
+        if result.get("success"):
+            # Also log a notification so the user sees it in the app
+            try:
+                sb.table("notification_logs").insert({
+                    "patient_id": patient_id,
+                    "channel": "app",
+                    "type": "payment_request",
+                    "payload": {
+                        "order_id": order_id,
+                        "payment_url": result["url"],
+                        "message": "Payment link generated via voice assistant."
+                    },
+                    "status": "sent"
+                }).execute()
+            except Exception as ne:
+                print(f"⚠️ Could not log payment notification: {ne}")
+            
+        return result
+        
+    except Exception as e:
+        print(f"Voice Pay Link Error: {e}")
+        return {"success": False, "error": str(e)}
 
 
 @app.post("/verify-payment")
@@ -451,14 +539,25 @@ async def verify_payment(request: VerifyPaymentRequest):
     """
     try:
         sb = _get_sb()
-        # Determine order_id — prefer explicit param, fall back to Stripe client_reference_id
+        # Determine order_id and verify payment status dynamically
         order_id = request.order_id
-        if not order_id and stripe.api_key and not request.session_id.startswith("mock_session"):
+        if stripe.api_key and not request.session_id.startswith("mock_session"):
             try:
                 session = stripe.checkout.Session.retrieve(request.session_id)
-                order_id = getattr(session, "client_reference_id", None)
+                if not order_id:
+                    order_id = getattr(session, "client_reference_id", None)
+                
+                # Strict check: payment must be 'paid'
+                if session.payment_status != "paid":
+                    return {
+                        "success": False, 
+                        "error": f"Payment status is '{session.payment_status}'. Order cannot be fulfilled until paid."
+                    }
             except Exception as se:
-                print(f"Stripe session retrieve failed (non-fatal): {se}")
+                print(f"Stripe session retrieve failed: {se}")
+                return {"success": False, "error": f"Could not verify payment with Stripe: {str(se)}"}
+        elif request.session_id.startswith("mock_session"):
+            print("INFO: Processing mock session (dynamic check skipped)")
 
         if not order_id:
             return {"success": False, "error": "Could not determine order ID from session"}
@@ -531,6 +630,24 @@ async def check_rx(patient_id: str, medicine_name: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/verify-prescription")
+async def verify_prescription(patient_id: str, medicine_name: str):
+    """
+    Check if a patient has a valid prescription for a medicine.
+    Uses PrescriptionAgent logic.
+    """
+    try:
+        from agents.prescription_agent import PrescriptionAgent
+        agent = PrescriptionAgent()
+        result = await agent.run(medicine_name, {
+            "user_id": patient_id,
+            "medicine_name": medicine_name,
+            "action": "verify"
+        })
+        return {"success": True, "valid": result.success, "message": result.message, "data": result.data}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 
 @app.post("/verify-rx-upload")
 @observe()
@@ -566,7 +683,7 @@ async def verify_rx_upload(
             "exactly as written. Include medicine names, dosages, instructions, patient name, "
             "doctor name, and date. Output only the extracted text, nothing else."
         )
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content([
             extraction_prompt,
             {"mime_type": mime, "data": b64},
@@ -1015,7 +1132,7 @@ Language Guidelines:
 """
 
         
-        # Using gemini-1.5-flash as standardized
+        # Using gemini-2.5-flash as standardized
         try:
             print("🤖 Health Assistant (Using gemini-2.5-flash)")
             response = gemini_model.generate_content(
