@@ -9,6 +9,7 @@ import json
 from typing import Any, Dict, List, Optional
 from supabase import create_client, Client
 import google.generativeai as genai
+from langfuse.decorators import observe
 
 from agents.base_agent import BaseAgent, AgentResult
 
@@ -58,6 +59,7 @@ class PharmacyAgent(BaseAgent):
         )
         return [r["extracted_text"] for r in (res.data or []) if r.get("extracted_text")]
 
+    @observe()
     def verify_prescription(self, medicine_name: str, patient_id: str) -> Dict[str, Any]:
         """
         Check whether any of the patient's prescription records mention the medicine.
@@ -99,6 +101,7 @@ class PharmacyAgent(BaseAgent):
             print(f"⚠️ Failed to verify prescription with Gemini: {e}")
             return {"verified": False, "qty": 0, "frequency_per_day": None, "dosage_text": None, "found_in": None}
 
+    @observe()
     def _extract_medicines_from_text(self, text: str) -> List[Dict[str, Any]]:
         """Use Gemini to rigorously extract a JSON list of medicines and quantities from prescription OCR text."""
         if not text or len(text.strip()) < 5:
@@ -202,6 +205,7 @@ class PharmacyAgent(BaseAgent):
     # ------------------------------------------------------------------
     # run() — called by the orchestrator
     # ------------------------------------------------------------------
+    @observe()
     async def run(self, task: str, context: Dict[str, Any]) -> AgentResult:
         """
         context must contain:

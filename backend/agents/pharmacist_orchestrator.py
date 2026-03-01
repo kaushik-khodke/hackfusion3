@@ -35,23 +35,32 @@ TOOLS = [
                 }
             },
             {
-                "name": "execute_sql_query",
+                "name": "fetch_table_data",
                 "description": (
-                    "Execute a READ-ONLY PostgreSQL query against the pharmacy database. "
+                    "Fetch rows from a specified table in the pharmacy database. "
                     "Available tables: "
-                    "- orders (id, patient_id, status, total_items, channel, created_at, finalized_at) "
+                    "- audit_logs (id, actor_id, action, resource_type, resource_id, metadata, ip_address, user_agent, created_at) "
+                    "- consent_requests (id, patient_id, doctor_id, status, access_type, reason, expires_at, approved_at, created_at, updated_at) "
+                    "- doctors (id, user_id, name, license_id, specialization, verified, created_at, updated_at) "
+                    "- document_chunks (id, record_id, patient_id, content, embedding, created_at, updated_at) "
+                    "- medicines (id, name, strength, unit_type, stock, prescription_required, created_at, updated_at, product_id, pzn, price_rec, package_size, description, reorder_threshold, last_restocked_at) "
+                    "- notification_logs (id, patient_id, channel, type, payload, status, created_at) "
+                    "- order_history_raw (id, patient_external_id, patient_age, patient_gender, purchase_date, product_name, quantity, total_price_eur, dosage_frequency, prescription_required_raw) "
                     "- order_items (id, order_id, medicine_id, qty, dosage_text, frequency_per_day, days_supply) "
-                    "- medicines (id, name, strength, stock, reorder_threshold, price_rec) "
-                    "- order_history_raw (id, document_date, total_price_eur, product_name) "
-                    "- patients (id, user_id, full_name, dob, gender, blood_group) "
-                    "WARNING: Write secure, valid PostgreSQL. Aggregate data (SUM, COUNT) rather than fetching raw rows if checking metrics."
+                    "- orders (id, patient_id, status, total_items, channel, created_at, finalized_at) "
+                    "- patients (id, user_id, uhid, full_name, phone, date_of_birth, blood_group, emergency_name, emergency_contact, address, city, state, pincode, profile_completed, created_at, updated_at, smart_pin, external_id) "
+                    "- profiles (id, role, full_name, phone, created_at, updated_at) "
+                    "- records (id, patient_id, uploaded_by, record_type, title, record_date, doctor_name, notes, file_url, file_name, file_size, ipfs_hash, extracted_text, created_at, updated_at, ipfs_cid, sha256_hash, encrypted_metadata, file_size_bytes, file_type, encrypted) "
+                    "- refill_alerts (id, patient_id, medicine_id, predicted_runout_date, status, created_at) "
+                    "Use this to fetch data and analyze metrics. If you do not specify select_columns, all columns are retrieved."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string", "description": "Raw SQL query string"}
+                        "table_name": {"type": "string", "description": "Name of the table to fetch"},
+                        "select_columns": {"type": "string", "description": "Optional comma-separated list of columns to retrieve. e.g. 'id, status'"}
                     },
-                    "required": ["query"]
+                    "required": ["table_name"]
                 }
             },
             {
@@ -102,13 +111,13 @@ You assist the Head Pharmacist.
 
 You have access to powerful tools:
 1. `search_patient`: Resolve names into UUIDs. (Always do this before looking up records!)
-2. `execute_sql_query`: Run raw Postgres queries to answer sales, metrics, or global stock trend questions. Ensure your queries are read-only (SELECT) and valid Postgres.
+2. `fetch_table_data`: Fetch all records from a given table to answer sales, metrics, or global stock trend questions. You have a massive context window, so you can fetch entire tables and compute aggregates yourself.
 3. `call_pharmacy_agent`: Find medicines in inventory.
 4. `call_health_agent` & `call_refill_agent`: Deep dive into a specific patient's medical files if the Pharmacist asks about them.
 
 RULES:
 1. **Administrative Persona**: Be extremely concise, highly analytical, and professional. 
-2. **Markdown formatting**: Always format SQL results, monetary values, and important identifiers in clean Markdown tables or bulleted lists.
+2. **Markdown formatting**: Always format data, monetary values, and important identifiers in clean Markdown tables or bulleted lists.
 3. **Multi-Agent Chain**: If asked about a user's health ("Why does John Smith need this refill?"): Find John's `user_id` -> run `call_health_agent` on `user_id`.
 4. **Data Privacy**: No data is hidden from you. You own the portal. Do your best to synthesize complex global states for the human.
 """
@@ -130,36 +139,28 @@ class PharmacistOrchestratorAgent:
         
         self._sessions: Dict[str, List[Dict]] = {}
     
-    def _execute_sql(self, query: str) -> AgentResult:
-        """Executes a Read-Only SQL query natively via Postgres API."""
-        import psycopg2
-        import psycopg2.extras
-        
-        # Parse Postgres URL from Supabase URL (Supabase API does not support raw SQL natively over REST, 
-        # but we can call it via a custom RPC function or standard Python psycopg2 if PG_CONNECTION_STRING exists)
-        # Since we don't have a direct raw SQL endpoint via the REST `self.db`, we will use the RPC approach if possible, 
-        # OR fallback to python-level filtering if needed. 
-        # Actually, let's execute it directly via the Python Driver if a connection string is given in .env
-        
-        pg_conn_str = os.getenv("DATABASE_URL")
-        # Ensure it's read-only
-        if not query.strip().upper().startswith("SELECT"):
-            return AgentResult(success=False, agent_name="pharmacist_orchestrator", message="Only SELECT queries are permitted.")
+    def _fetch_table_data(self, table_name: str, select_columns: str = "*") -> AgentResult:
+        """Fetches rows for a given table via Supabase REST API."""
+        allowed_tables = [
+            "audit_logs", "consent_requests", "doctors", "document_chunks", 
+            "medicines", "notification_logs", "order_history_raw", "order_items", 
+            "orders", "patients", "profiles", "records", "refill_alerts"
+        ]
+        if table_name not in allowed_tables:
+            return AgentResult(success=False, agent_name="pharmacist_orchestrator", message=f"Table '{table_name}' is not permitted. Allowed: {allowed_tables}")
             
-        if pg_conn_str:
-            try:
-                # Basic psycopg2 logic
-                with psycopg2.connect(pg_conn_str) as conn:
-                    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                        cur.execute(query)
-                        rows = cur.fetchall()
-                        return AgentResult(success=True, data=[dict(r) for r in rows], agent_name="pharmacist_orchestrator", message=f"Executed query successfully. Found {len(rows)} rows.")
-            except Exception as e:
-                 return AgentResult(success=False, agent_name="pharmacist_orchestrator", message=f"SQL Error: {e}")
-        else:
-             # Fallback: We don't have direct psycopg2 connection URL configured in .env. We must simulate this via basic table lists or RPC
-             # Instead of crashing, let's execute a generic RPC we know works via Supabase REST, or just tell the AI they can't do raw SQL right now.
-             return AgentResult(success=False, agent_name="pharmacist_orchestrator", message="Direct raw SQL execution requires DATABASE_URL defined in environment. The AI cannot run raw SQL at the moment.")
+        try:
+            # We fetch rows for the AI to analyze in its context window
+            # If asking for *, exclude embeddings to prevent massive payload size if table is document_chunks
+            actual_select = select_columns if select_columns else "*"
+            if table_name == "document_chunks" and actual_select == "*":
+                actual_select = "id, record_id, patient_id, content, created_at, updated_at"
+                
+            res = self.db.table(table_name).select(actual_select).execute()
+            data = res.data or []
+            return AgentResult(success=True, data=data, agent_name="pharmacist_orchestrator", message=f"Fetched {len(data)} rows from {table_name}")
+        except Exception as e:
+            return AgentResult(success=False, agent_name="pharmacist_orchestrator", message=f"Database Error: {e}")
         
     def _search_patient(self, name_query: str) -> AgentResult:
         res = (
@@ -186,8 +187,8 @@ class PharmacistOrchestratorAgent:
             self._sessions[session_id] = self._sessions[session_id][-max_msgs:]
 
     async def _dispatch(self, tool_name: str, args: Dict) -> AgentResult:
-        if tool_name == "execute_sql_query":
-             return await asyncio.to_thread(self._execute_sql, args.get("query", ""))
+        if tool_name == "fetch_table_data":
+             return await asyncio.to_thread(self._fetch_table_data, args.get("table_name", ""), args.get("select_columns", "*"))
         
         if tool_name == "search_patient":
              return await asyncio.to_thread(self._search_patient, args.get("name_query", ""))

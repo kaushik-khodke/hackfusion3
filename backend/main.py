@@ -14,6 +14,7 @@ from voice_service import VoiceService
 from rag_service import RAGService
 from pharmacy_service import PharmacyService
 from ml_engine import analyze_risk, parse_medical_text
+from langfuse.decorators import observe
 
 # Load environment variables
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
@@ -297,6 +298,7 @@ async def check_rx(patient_id: str, medicine_name: str):
 
 
 @app.post("/verify-rx-upload")
+@observe()
 async def verify_rx_upload(
     patient_id: str = Form(...),
     medicine_name: str = Form(...),
@@ -560,8 +562,7 @@ app.router.lifespan_context = lifespan
 
 
 @app.post("/pharmacy/chat")
-
-
+@observe()
 async def pharmacy_chat(request: PharmacyChatRequest):
     """
     Expert Pharmacy Agent — powered by the multi-agent orchestrator.
@@ -670,6 +671,7 @@ async def root():
 # Format: { user_id: [ {"role": "user", "parts": ["msg"]}, {"role": "model", "parts": ["response"]} ] }
 
 @app.post("/chat")
+@observe()
 async def chat(request: ChatRequest):
     """
     Main chat endpoint with RAG support, context window, and optional voice output
@@ -1135,7 +1137,23 @@ async def pharmacist_ai_query(req: PharmacistAIRequest):
 
     except Exception as e:
         print(f"Pharmacist AI Agent Error: {e}")
-        return ChatResponse(success=False, response="", error=str(e))
+        import traceback
+        traceback.print_exc()
+        error_msg = str(e)
+        fallbacks = {
+            "hi": "मुझे अभी आपके फार्मेसी रिकॉर्ड्स में परेशानी हो रही है। कृपया थोड़ी देर बाद फिर से प्रयास करें।",
+            "mr": "मला आता तुमच्या फार्मसी रेकॉर्डमध्ये अडचण येत आहे. कृपया थोड्या वेळाने पुन्हा प्रयत्न करा.",
+            "en": "I'm having trouble retrieving the pharmacist data. Please try again.",
+        }
+        quota_fallbacks = {
+            "hi": "मुझे अभी बहुत सारे अनुरोध मिल रहे हैं। कृपया एक पल प्रतीक्षा करें और पुन: प्रयास करें।",
+            "mr": "मला सध्या खूप विनंत्या येत आहेत. कृपया क्षणभर थांबा आणि पुन्हा प्रयत्न करा.",
+            "en": "I'm currently receiving too many requests. Please wait a moment and try again.",
+        }
+        lang = getattr(req, "language", "en")
+        if "429" in error_msg or "quota" in error_msg.lower() or "RESOURCE_EXHAUSTED" in error_msg:
+            return ChatResponse(success=False, response=quota_fallbacks.get(lang, quota_fallbacks["en"]), error=error_msg)
+        return ChatResponse(success=False, response=fallbacks.get(lang, fallbacks["en"]), error=error_msg)
 
 
 # ==========================================
