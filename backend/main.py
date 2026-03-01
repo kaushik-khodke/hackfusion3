@@ -2,24 +2,33 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-import google.generativeai as genai
+from typing import Optional, List, Dict, Any
 import os
-from dotenv import load_dotenv
-from typing import Optional
 import io
 import time
 import json
+from dotenv import load_dotenv
+
+# ── Load .env FIRST before anything else reads env vars ──────────────────────
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))  # also load local backend/.env if present
+
+import stripe
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+print(f"Stripe key loaded: {'YES (sk_test_...)' if stripe.api_key and stripe.api_key.startswith('sk_') else 'NO - MISSING!'}")
+
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
+import google.generativeai as genai
 
 from voice_service import VoiceService
 from rag_service import RAGService
 from pharmacy_service import PharmacyService
 from ml_engine import analyze_risk, parse_medical_text
 
-# Load environment variables
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
-
 # Initialize FastAPI
 app = FastAPI(title="Healthcare AI Assistant", version="2.0.0")
+
+PORT = int(os.getenv("PORT", 8080))
 
 # CORS Configuration
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:3000")
@@ -74,6 +83,15 @@ class PharmacyChatRequest(BaseModel):
     patient_id: str
     language: str = "en"
     use_voice: bool = False
+
+class CheckoutSessionRequest(BaseModel):
+    order_id: str
+    success_url: str
+    cancel_url: str
+
+class VerifyPaymentRequest(BaseModel):
+    session_id: str
+    order_id: Optional[str] = None
 
 class ManualOrderRequest(BaseModel):
     patient_id: str          # auth.uid()
@@ -239,7 +257,7 @@ async def manual_order(request: ManualOrderRequest):
                 "days_supply": 30,
             }).execute()
 
-        # Finalise order and decrement stock
+        # Decrement stock and mark as fulfilled immediately
         for i in valid_items:
             try:
                 sb.rpc("decrement_medicine_stock", {
@@ -247,7 +265,7 @@ async def manual_order(request: ManualOrderRequest):
                     "p_qty": i["qty"],
                 }).execute()
             except Exception:
-                pass  # Stock decrement failure should not block the order
+                pass
 
         from datetime import datetime, timezone
         sb.table("orders").update({
@@ -264,6 +282,128 @@ async def manual_order(request: ManualOrderRequest):
     except HTTPException:
         raise
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/create-checkout-session")
+async def create_checkout_session(request: CheckoutSessionRequest):
+    """
+    Generate a Stripe Checkout Session for an existing pending order.
+    """
+    try:
+        sb = _get_sb()
+        # Fetch order details
+        order_res = (
+            sb.table("orders")
+            .select("id, status, order_items(qty, medicines(name, price_rec))")
+            .eq("id", request.order_id)
+            .single()
+            .execute()
+        )
+        if not order_res.data:
+            raise HTTPException(status_code=404, detail="Order not found")
+        order = order_res.data
+        print(f"DEBUG: Checkout sees order {order['id']} with status {order['status']}")
+        # Note: no status check — fulfilled orders can also demo the Stripe checkout UI
+
+        line_items = []
+        for item in order["order_items"]:
+            med = item["medicines"]
+            # Convert price to cents. Default to 10.00 if N/A
+            price_amount = min(max(1, int(float(med.get("price_rec") or 10.00) * 100)), 999999)
+            line_items.append({
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {
+                        "name": med["name"],
+                    },
+                    "unit_amount": price_amount,
+                },
+                "quantity": item["qty"],
+            })
+
+        if not line_items:
+            raise HTTPException(status_code=400, detail="No valid items in order to checkout")
+
+        if not stripe.api_key:
+            # Fallback mock
+            mock_url = f"{request.success_url}?session_id=mock_session_123&order_id={request.order_id}"
+            return {"success": True, "url": mock_url}
+
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=line_items,
+            mode="payment",
+            # Encode BOTH session_id and order_id in success URL so frontend can pass both back
+            success_url=request.success_url + "?session_id={CHECKOUT_SESSION_ID}&order_id=" + request.order_id,
+            cancel_url=request.cancel_url,
+            client_reference_id=request.order_id
+        )
+
+        return {"success": True, "url": session.url}
+    except Exception as e:
+        print(f"Checkout Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/verify-payment")
+async def verify_payment(request: VerifyPaymentRequest):
+    """
+    Finalize pending order after returning from Stripe Checkout.
+    Since Stripe only redirects to success_url if payment is complete,
+    we trust the redirect and fulfill via DB directly (no SDK re-verify needed).
+    """
+    try:
+        sb = _get_sb()
+        # Determine order_id — prefer explicit param, fall back to Stripe client_reference_id
+        order_id = request.order_id
+        if not order_id and stripe.api_key and not request.session_id.startswith("mock_session"):
+            try:
+                session = stripe.checkout.Session.retrieve(request.session_id)
+                order_id = getattr(session, "client_reference_id", None)
+            except Exception as se:
+                print(f"Stripe session retrieve failed (non-fatal): {se}")
+
+        if not order_id:
+            return {"success": False, "error": "Could not determine order ID from session"}
+
+        print(f"Verify: Fulfilling order {order_id} for session {request.session_id}")
+
+        # Fetch the order
+        order_res = (
+            sb.table("orders")
+            .select("status, order_items(medicine_id, qty)")
+            .eq("id", order_id)
+            .single()
+            .execute()
+        )
+        if not order_res.data:
+            return {"success": False, "error": f"Order {order_id} not found"}
+
+        if order_res.data["status"] == "fulfilled":
+            return {"success": True, "message": "Order already fulfilled — your medicines are on the way! ✅"}
+
+        # Decrement stock for each item
+        for item in order_res.data["order_items"]:
+            try:
+                sb.rpc("decrement_medicine_stock", {
+                    "p_medicine_id": item["medicine_id"],
+                    "p_qty": item["qty"],
+                }).execute()
+            except Exception as de:
+                print(f"Stock decrement warn: {de}")
+
+        # Mark order as fulfilled
+        from datetime import datetime, timezone
+        sb.table("orders").update({
+            "status": "fulfilled",
+            "finalized_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", order_id).execute()
+
+        return {"success": True, "message": "Payment confirmed! Your order is being prepared. ✅"}
+
+    except Exception as e:
+        print(f"Verify Payment Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

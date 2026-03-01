@@ -287,7 +287,7 @@ class PharmacyAgent(BaseAgent):
                                 f"Could you please tell me this information so I can complete your safety profile and order?"
                     )
 
-            # Create + finalize
+            # Create pending order draft
             draft = self.create_order_draft(patient_id, [{
                 "medicine_id": med["id"], 
                 "qty": qty,
@@ -297,21 +297,31 @@ class PharmacyAgent(BaseAgent):
             if not draft.get("success"):
                 return AgentResult(success=False, agent_name=self.name, message="Failed to create order draft.")
 
-            final = self.finalize_order(draft["order_id"])
-            if final["status"] != "fulfilled":
-                return AgentResult(success=False, data=final, agent_name=self.name,
-                                   message=f"Order could not be finalised: {final.get('problems')}")
-
-            return AgentResult(
-                success=True,
-                data=final,
-                agent_name=self.name,
-                message=(
-                    f"✅ Order placed! **{qty}x {med['name']}** ({med['strength'] or ''}) "
-                    f"— Order ID: `{final['order_id']}`. "
-                    f"Stock updated in real time."
-                ),
-            )
+            # Generate Stripe Checkout Link (Internal Call)
+            import requests
+            try:
+                # We call the FastAPI endpoint internally
+                PORT = int(os.getenv("PORT", 8080))
+                resp = requests.post(f"http://127.0.0.1:{PORT}/create-checkout-session", json={
+                    "order_id": draft["order_id"],
+                    "success_url": "http://localhost:5173/payment/success",
+                    "cancel_url": "http://localhost:5173/payment/cancel"
+                })
+                if resp.status_code == 200:
+                    checkout_url = resp.json().get("url")
+                    return AgentResult(
+                        success=True,
+                        agent_name=self.name,
+                        data={"order_id": draft["order_id"], "checkout_url": checkout_url},
+                        message=(
+                            f"Almost done! Your order for **{qty}x {med['name']}** has been drafted. "
+                            f"\n\n💳 Please complete your payment here to finalise the order: \n[Pay for Order]({checkout_url})"
+                        )
+                    )
+                else:
+                    return AgentResult(success=False, agent_name=self.name, message=f"Checkout creation failed: {resp.text}")
+            except Exception as e:
+                return AgentResult(success=False, agent_name=self.name, message=f"Internal checkout routing error: {str(e)}")
 
         # --- ORDER FROM PRESCRIPTION ---
         if action == "order_from_prescription":
@@ -419,28 +429,33 @@ class PharmacyAgent(BaseAgent):
             if not draft.get("success"):
                 return AgentResult(success=False, agent_name=self.name, message="Internal error creating the bulk order draft.")
 
-            # Finalize Stock
-            final = self.finalize_order(draft["order_id"])
-            if final["status"] != "fulfilled":
-                return AgentResult(
-                    success=False, 
-                    data=final, 
-                    agent_name=self.name,
-                    message=f"Order could not be finalised due to a stock error at checkout: {final.get('problems')}"
-                )
-
-            summary = (
-                f"**Prescription Processed:** {rx_record['title']}\n"
-                f"**Order ID:** `{final['order_id']}`\n\n"
-                f"**Items:**\n" + "\n".join(results_log)
-            )
-
-            return AgentResult(
-                success=True,
-                data=final,
-                agent_name=self.name,
-                message=summary,
-            )
+            # Generate Stripe Checkout Link (Internal Call)
+            import requests
+            try:
+                PORT = int(os.getenv("PORT", 8080))
+                resp = requests.post(f"http://127.0.0.1:{PORT}/create-checkout-session", json={
+                    "order_id": draft["order_id"],
+                    "success_url": "http://localhost:5173/payment/success",
+                    "cancel_url": "http://localhost:5173/payment/cancel"
+                })
+                if resp.status_code == 200:
+                    checkout_url = resp.json().get("url")
+                    summary = (
+                        f"**Prescription Parsed:** {rx_record['title']}\n"
+                        f"**Order ID:** `{draft['order_id']}`\n\n"
+                        f"**Items Readied for Checkout:**\n" + "\n".join(results_log) + "\n\n"
+                        f"💳 Please complete your payment here to finalise the order: \n[Pay for Medication]({checkout_url})"
+                    )
+                    return AgentResult(
+                        success=True,
+                        agent_name=self.name,
+                        data={"order_id": draft["order_id"], "checkout_url": checkout_url},
+                        message=summary
+                    )
+                else:
+                    return AgentResult(success=False, agent_name=self.name, message=f"Checkout creation failed: {resp.text}")
+            except Exception as e:
+                return AgentResult(success=False, agent_name=self.name, message=f"Internal checkout routing error: {str(e)}")
 
         return AgentResult(success=False, agent_name=self.name, message=f"Unknown action: {action}")
 

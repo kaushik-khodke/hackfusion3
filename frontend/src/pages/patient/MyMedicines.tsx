@@ -334,6 +334,7 @@ export default function MyMedicines() {
         setOrdering(true)
         setOrderResult(null)
         try {
+            // 1. Create & immediately fulfill the order
             const res = await fetch(`${API_BASE_URL}/manual-order`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -348,15 +349,33 @@ export default function MyMedicines() {
                 }),
             })
             const data = await res.json()
-            if (data.success) {
+            if (!data.success) {
+                setOrderResult({ success: false, message: `❌ ${data.error || 'Order failed'}` })
+                return
+            }
+
+            setCart([])
+            fetchOrders()
+
+            // 2. Open Stripe checkout for payment demo → redirects to /payment/success
+            const checkoutRes = await fetch(`${API_BASE_URL}/create-checkout-session`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    order_id: data.order_id,
+                    success_url: `${window.location.origin}/payment/success`,
+                    cancel_url: `${window.location.origin}/payment/cancel`
+                }),
+            })
+            const checkoutData = await checkoutRes.json()
+            if (checkoutData.success && checkoutData.url) {
+                window.location.href = checkoutData.url // → Stripe popup → /payment/success
+            } else {
+                // If Stripe fails, just show success in-page (order is already fulfilled)
                 setOrderResult({
                     success: true,
-                    message: `✅ Order placed! (${data.items_ordered?.map((i: any) => `${i.qty}× ${i.name}`).join(', ')})${data.warnings?.length ? `\n⚠️ ${data.warnings.join('; ')}` : ''}`,
+                    message: `✅ Order confirmed! (${data.items_ordered?.map((i: any) => `${i.qty}× ${i.name}`).join(', ')})`,
                 })
-                setCart([])
-                fetchOrders()
-            } else {
-                setOrderResult({ success: false, message: `❌ ${data.error || 'Order failed'}` })
             }
         } catch (e) {
             setOrderResult({ success: false, message: '❌ Network error. Is the backend running?' })

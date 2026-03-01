@@ -42,6 +42,9 @@ const UpdatePassword = React.lazy(() =>
   import("@/pages/auth/UpdatePassword").then((module) => ({ default: module.UpdatePassword }))
 );
 
+const PaymentSuccess = React.lazy(() => import("@/pages/PaymentSuccess"));
+const PaymentCancel = React.lazy(() => import("@/pages/PaymentCancel"));
+
 function LoadingSpinner() {
   return (
     <div className="flex items-center justify-center min-h-screen">
@@ -158,6 +161,23 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Records />
+                </ProtectedRoute>
+              }
+            />
+            {/* Payment Callbacks */}
+            <Route
+              path="/payment/success"
+              element={
+                <ProtectedRoute>
+                  <PaymentSuccess />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/payment/cancel"
+              element={
+                <ProtectedRoute>
+                  <PaymentCancel />
                 </ProtectedRoute>
               }
             />
