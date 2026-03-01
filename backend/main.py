@@ -103,6 +103,16 @@ class PharmacistAIRequest(BaseModel):
     use_voice: bool = False
     language: str = "en"
 
+class VoiceOrderRequest(BaseModel):
+    patient_id: str
+    medicine_name: str
+    quantity: int = 1
+
+class OutboundCallRequest(BaseModel):
+    phone_number: str
+    agent_id: str
+    agent_phone_number_id: Optional[str] = None
+
 # ==========================================
 # ROUTES
 # ==========================================
@@ -285,6 +295,91 @@ async def manual_order(request: ManualOrderRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/voice-order")
+async def voice_order(request: VoiceOrderRequest):
+    """
+    Webhook for ElevenLabs Agent to place an order via voice.
+    Matches the spoken medicine_name to the catalog and creates a manual order payload.
+    """
+    try:
+        sb = _get_sb()
+        # 1. Search for medicine by name
+        search_res = (
+            sb.table("medicines")
+            .select("id, name, stock, prescription_required")
+            .ilike("name", f"%{request.medicine_name}%")
+            .execute()
+        )
+        if not search_res.data:
+            return {"success": False, "error": f"Medicine '{request.medicine_name}' not found in catalog."}
+            
+        med = search_res.data[0] # Use the best partial match
+        
+        # 2. Delegate to the manual_order logic using ManualOrderRequest
+        order_req = ManualOrderRequest(
+            patient_id=request.patient_id,
+            items=[{
+                "medicine_id": med["id"],
+                "qty": request.quantity,
+                "frequency_per_day": 1,
+                "dosage_text": "As directed"
+            }]
+        )
+        # Call the existing function to create the order
+        result = await manual_order(order_req)
+        
+        if result.get("success"):
+            return {
+                "success": True, 
+                "response": f"Successfully ordered {request.quantity} of {med['name']}."
+            }
+        else:
+            return {"success": False, "response": f"Order failed: {result.get('error', 'unknown error')}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/trigger-outbound-call")
+async def trigger_outbound_call(request: OutboundCallRequest):
+    """
+    Triggers an outbound phone call via ElevenLabs.
+    Requires a phone number and agent ID.
+    Relies on ElevenLabs Twilio integration.
+    """
+    import httpx
+    
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ELEVENLABS_API_KEY not configured")
+        
+    # Default to a configured env var if not provided in request
+    agent_phone_number_id = request.agent_phone_number_id or os.getenv("ELEVENLABS_PHONE_ID")
+    if not agent_phone_number_id:
+        return {"success": False, "error": "Agent Phone Number ID is missing (ELEVENLABS_PHONE_ID not set)"}
+
+    url = "https://api.elevenlabs.io/v1/convai/twilio/outbound-call"
+    headers = {
+        "xi-api-key": api_key,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "agent_id": request.agent_id,
+        "to_number": request.phone_number,
+        "agent_phone_number_id": agent_phone_number_id
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers, json=payload, timeout=30.0)
+            
+            if response.status_code == 200:
+                return {"success": True, "message": "Call initiated successfully!"}
+            else:
+                return {
+                    "success": False, 
+                    "error": f"ElevenLabs API Error: {response.status_code} - {response.text}"
+                }
+    except Exception as e:
+        return {"success": False, "error": f"Internal Error: {str(e)}"}
 
 @app.post("/create-checkout-session")
 async def create_checkout_session(request: CheckoutSessionRequest):
@@ -1380,7 +1475,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=8080,
         reload=True,
         log_level="info"
     )

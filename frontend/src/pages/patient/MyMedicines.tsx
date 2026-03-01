@@ -23,7 +23,11 @@ import {
     Zap,
     CalendarClock,
     FileText,
+    Mic,
+    PhoneCall,
+    PhoneOff,
 } from 'lucide-react'
+import { useConversation } from '@elevenlabs/react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Badge } from '@/components/ui/Badge'
@@ -204,6 +208,69 @@ export default function MyMedicines() {
     const [rxFile, setRxFile] = useState<File | null>(null)
     const [rxVerifying, setRxVerifying] = useState(false)
     const [rxModalResult, setRxModalResult] = useState<{ valid: boolean; message: string } | null>(null)
+    const [phoneNumber, setPhoneNumber] = useState('')
+    const [callingPhone, setCallingPhone] = useState(false)
+
+    // ── ElevenLabs Conversational AI ────────────────────
+    const conversation = useConversation({
+        onConnect: () => console.log('Connected to AI'),
+        onDisconnect: () => {
+            console.log('Disconnected from AI')
+            fetchOrders() // refresh orders after the call in case AI placed one
+        },
+        onMessage: (message: any) => console.log('AI Message:', message),
+        onError: (error: any) => console.error('AI Error:', error),
+    })
+
+    const toggleAICall = useCallback(async () => {
+        if (conversation.status === 'connected') {
+            await conversation.endSession()
+        } else {
+            try {
+                // Request microphone permission
+                await navigator.mediaDevices.getUserMedia({ audio: true })
+                await conversation.startSession({
+                    agentId: (import.meta.env.VITE_ELEVENLABS_AGENT_ID as string) || 'dummy_agent_id',
+                    connectionType: 'webrtc',
+                    dynamicVariables: {
+                        patient_id: user?.id || 'anonymous'
+                    }
+                })
+            } catch (err) {
+                console.error('Failed to start AI call:', err)
+                alert('Could not start call. Please check microphone access and valid Agent ID.')
+            }
+        }
+    }, [conversation])
+
+    const triggerOutboundCall = async () => {
+        if (!phoneNumber) {
+            alert('Please enter your phone number first')
+            return
+        }
+        setCallingPhone(true)
+        try {
+            const res = await fetch(`${API_BASE_URL}/trigger-outbound-call`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    phone_number: phoneNumber,
+                    agent_id: import.meta.env.VITE_ELEVENLABS_AGENT_ID || 'dummy_agent_id'
+                })
+            })
+            const data = await res.json()
+            if (data.success) {
+                alert('Call initiated! Your phone should ring in a few seconds.')
+            } else {
+                alert(`Error: ${data.error}`)
+            }
+        } catch (err) {
+            console.error(err)
+            alert('Failed to connect to backend.')
+        } finally {
+            setCallingPhone(false)
+        }
+    }
 
     // ── Fetch orders ────────────────────────────────────
     const fetchOrders = useCallback(async () => {
@@ -768,14 +835,57 @@ export default function MyMedicines() {
                         <div className="flex flex-col lg:flex-row gap-6">
                             {/* Catalogue */}
                             <div className="flex-1">
-                                <div className="relative mb-5">
-                                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                                    <Input
-                                        value={search}
-                                        onChange={e => setSearch(e.target.value)}
-                                        placeholder="Search medicines..."
-                                        className="pl-10 rounded-xl h-12 bg-white border-slate-200"
-                                    />
+                                <div className="flex flex-col sm:flex-row gap-3 mb-5">
+                                    <div className="relative flex-1">
+                                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                                        <Input
+                                            value={search}
+                                            onChange={e => setSearch(e.target.value)}
+                                            placeholder="Search medicines..."
+                                            className="pl-10 rounded-xl h-12 bg-white border-slate-200"
+                                        />
+                                    </div>
+                                    <Button
+                                        onClick={toggleAICall}
+                                        className={`h-12 rounded-xl px-5 whitespace-nowrap shadow-sm transition-all ${conversation.status === 'connected'
+                                            ? 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 hover:text-red-700'
+                                            : conversation.status === 'connecting'
+                                                ? 'bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100'
+                                                : 'bg-indigo-50 text-indigo-600 border border-indigo-200 hover:bg-indigo-100 hover:text-indigo-700'
+                                            }`}
+                                        variant="outline"
+                                    >
+                                        {conversation.status === 'connected' ? (
+                                            <><PhoneOff className="w-4 h-4 mr-2 animate-pulse" /> End AI Call</>
+                                        ) : conversation.status === 'connecting' ? (
+                                            <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Connecting...</>
+                                        ) : (
+                                            <><PhoneCall className="w-4 h-4 mr-2" /> Order via Voice (AI)</>
+                                        )}
+                                    </Button>
+                                </div>
+
+                                <div className="flex flex-col sm:flex-row gap-3 mb-5 items-center bg-white/50 p-4 rounded-2xl border border-indigo-100 shadow-sm">
+                                    <div className="flex-1 w-full">
+                                        <label className="text-[10px] font-bold text-indigo-400 uppercase tracking-wider mb-1 block ml-1">Receive Outbound Call</label>
+                                        <Input
+                                            value={phoneNumber}
+                                            onChange={e => setPhoneNumber(e.target.value)}
+                                            placeholder="+1234567890 (inc. country code)"
+                                            className="rounded-xl h-11 bg-white border-slate-200"
+                                        />
+                                    </div>
+                                    <Button
+                                        onClick={triggerOutboundCall}
+                                        disabled={callingPhone}
+                                        className="h-11 rounded-xl px-6 bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-200 w-full sm:w-auto mt-5 sm:mt-0"
+                                    >
+                                        {callingPhone ? (
+                                            <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Calling...</>
+                                        ) : (
+                                            <><PhoneCall className="w-4 h-4 mr-2" /> Call My Phone</>
+                                        )}
+                                    </Button>
                                 </div>
 
                                 {loadingCat ? (

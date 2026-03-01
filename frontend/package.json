@@ -11,6 +11,7 @@
   "dependencies": {
     "@11labs/react": "^0.2.0",
     "@elevenlabs/client": "^0.15.0",
+    "@elevenlabs/react": "^0.14.1",
     "@hookform/resolvers": "^3.10.0",
     "@pinata/sdk": "^2.1.0",
     "@radix-ui/react-avatar": "^1.1.1",
