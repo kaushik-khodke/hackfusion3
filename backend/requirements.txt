@@ -11,3 +11,4 @@ aiofiles>=24.1.0
 scikit-learn>=1.5.0
 numpy>=1.26.0
 pandas>=2.0.0
+langfuse==2.50.0

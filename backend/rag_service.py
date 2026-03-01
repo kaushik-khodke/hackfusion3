@@ -4,6 +4,7 @@ import requests
 import io
 import PyPDF2
 from typing import List, Optional
+from langfuse.decorators import observe
 
 class RAGService:
     """
@@ -14,6 +15,7 @@ class RAGService:
     def __init__(self, supabase_url: str, supabase_key: str):
         self.supabase: Client = create_client(supabase_url, supabase_key)
     
+    @observe()
     async def search_records(
         self, 
         user_id: str, 
@@ -63,6 +65,7 @@ class RAGService:
             print(f"❌ RAG Search Error: {e}")
             return ""
     
+    @observe()
     async def process_document(
         self,
         file_url: str,

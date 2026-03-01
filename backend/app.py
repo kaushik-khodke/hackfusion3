@@ -7,6 +7,7 @@ import io
 import PyPDF2
 from supabase import create_client, Client
 from ml_engine import analyze_risk
+from langfuse.decorators import observe
 
 from dotenv import load_dotenv
 
@@ -37,6 +38,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # ROUTE 1: CHATBOT (RAG ENABLED)
 # ==========================================
 @app.route('/chat', methods=['POST'])
+@observe()
 def chat():
     data = request.json
     user_message = data.get('message', '')
@@ -109,6 +111,7 @@ def chat():
 # ROUTE 2: DOCUMENT PROCESSING (NEW!)
 # ==========================================
 @app.route('/process_document', methods=['POST'])
+@observe()
 def process_document():
     data = request.json
     file_url = data.get('file_url')
@@ -220,6 +223,7 @@ def process_document():
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/analyze_health', methods=['POST'])
+@observe()
 def analyze_health():
     try:
         data = request.json
